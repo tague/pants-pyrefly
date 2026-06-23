@@ -1,0 +1,23 @@
+# Pants workspace
+/.pants.d/
+/dist/
+/.pids
+/.pants.workdir/
+.pants.bootstrap
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+/build/
+.coverage*
+.mypy_cache/
+.pytest_cache/
+
+# OS / editors
+.DS_Store
+*.swp
+
+# Claude local settings
+.claude/settings.local.json

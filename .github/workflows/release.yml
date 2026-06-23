@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC). No API token needed.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      - name: Build wheel + sdist
+        run: pants package pants-plugins/pants_pyrefly:dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist/
+          # Fail if the artifacts look wrong rather than silently skipping.
+          verify-metadata: true

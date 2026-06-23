@@ -1,0 +1,36 @@
+[GLOBAL]
+pants_version = "2.32.0"
+pythonpath = ["%(buildroot)s/pants-plugins"]
+backend_packages = [
+    "pants.backend.python",
+    "pants.backend.plugin_development",
+    "pants.backend.experimental.python",
+    "pants_pyrefly",
+]
+
+[python]
+enable_resolves = true
+interpreter_constraints = [">=3.9,<3.15"]
+default_resolve = "python-default"
+
+[python.resolves]
+pants-plugins = "build-support/lockfiles/pants-plugins.lock"
+python-default = "build-support/lockfiles/python-default.lock"
+
+[python.resolves_to_interpreter_constraints]
+# The plugin imports `pantsbuild.pants`, which only runs on the interpreter Pants itself uses.
+# Pants 2.32 ships as cp314, so the plugin resolve must target CPython 3.14.
+pants-plugins = ["==3.14.*"]
+
+[python-repos]
+# `pantsbuild.pants` is not published to PyPI; it lives in the Pants wheels index.
+indexes = [
+    "https://pypi.org/simple/",
+    "https://wheels.pantsbuild.org/simple/",
+]
+
+[source]
+root_patterns = [
+    "/pants-plugins",
+    "/testprojects/src",
+]

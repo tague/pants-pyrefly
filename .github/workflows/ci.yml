@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: lint / check / test / package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pants 2.32 runs on CPython 3.14, and the `pants-plugins` resolve targets 3.14.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          # Bump to invalidate all caches.
+          gha-cache-key: v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      - name: Lint
+        run: pants lint ::
+
+      - name: Check (run Pyrefly on the example project)
+        run: pants check ::
+
+      - name: Test
+        run: pants test ::
+
+      - name: Package (build the wheel + sdist)
+        run: pants package pants-plugins/pants_pyrefly:dist
