@@ -35,10 +35,15 @@ from pants.core.util_rules.external_tool import download_external_tool
 from pants.core.util_rules.source_files import SourceFilesRequest, determine_source_files
 from pants.engine.collection import Collection
 from pants.engine.fs import MergeDigests
-from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
+try:
+    # Pants >= 2.30 renamed this call-by-name rule.
+    from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
+except ImportError:
+    # Pants < 2.30 (e.g. 2.27) — identical call signature, earlier name.
+    from pants.engine.internals.graph import coarsened_targets as coarsened_targets_get
 from pants.engine.intrinsics import execute_process, merge_digests
 from pants.engine.platform import Platform
-from pants.engine.process import Process
+from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, implicitly, rule
 from pants.engine.target import CoarsenedTargets, CoarsenedTargetsRequest, FieldSet, Target
 from pants.engine.unions import UnionRule
@@ -209,7 +214,11 @@ async def pyrefly_typecheck_partition(
             append_only_caches=requirements_venv_pex.append_only_caches or {},
             description=f"Run Pyrefly on {pluralize(len(root_sources.snapshot.files), 'file')}.",
             level=LogLevel.DEBUG,
-            cache_scope=check_subsystem.default_process_cache_scope,
+            # `default_process_cache_scope` (which honors `--force`) exists on Pants >= 2.30;
+            # on 2.27 fall back to the normal "cache successful runs" scope.
+            cache_scope=getattr(
+                check_subsystem, "default_process_cache_scope", ProcessCacheScope.SUCCESSFUL
+            ),
         ),
         **implicitly(),
     )

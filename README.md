@@ -9,8 +9,10 @@ that imports resolve correctly.
 
 ## Requirements
 
-- **Pants 2.32.x** — this release targets the Pants 2.32 line (which runs on CPython 3.14).
-  See the [compatibility table](#pants-compatibility) for other versions.
+- **Pants 2.27–2.32.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
+  (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.32.
+- The **published wheel** targets the 2.32 line (CPython 3.14). On **Pants 2.27** (e.g. a repo not
+  yet upgraded), install the plugin **from source** — see [Installation](#installation).
 
 ## Installation
 
@@ -24,6 +26,20 @@ backend_packages.add = [
     "pants_pyrefly",
 ]
 ```
+
+### From source (in-repo) — works on Pants 2.27+
+
+For an existing repo (e.g. on Pants 2.27), consume the plugin from source instead of a wheel — the
+same way in-repo plugins are normally loaded. Copy `pants-plugins/pants_pyrefly/` into your repo and:
+
+```toml
+[GLOBAL]
+pythonpath = ["%(buildroot)s/pants-plugins"]
+backend_packages.add = ["pants.backend.python", "pants_pyrefly"]
+```
+
+If you keep plugin code in a dedicated `pants-plugins` resolve, add it there and run
+`pants generate-lockfiles`.
 
 ## Usage
 
@@ -62,10 +78,11 @@ python_sources(skip_pyrefly=True)
 
 | Plugin version | Pants | Pyrefly (default) |
 | --- | --- | --- |
-| `0.1.0` | `2.32.x` | `1.1.1` |
+| `0.1.0` | `2.27`–`2.32` | `1.1.1` |
 
-A plugin release targets a single Pants minor version, because the Pants plugin API is not stable
-across minor versions.
+The plugin supports both the legacy (`Get`/`MultiGet`) and modern (call-by-name) rules APIs through
+a small version-conditional import (the rules API changed at Pants 2.30, and again removed `Get`
+by 2.32). Verified on 2.27 and 2.32; in-between versions use the same modern API.
 
 ## Development
 
