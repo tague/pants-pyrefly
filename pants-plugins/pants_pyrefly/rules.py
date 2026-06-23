@@ -35,14 +35,26 @@ from pants.core.util_rules.config_files import find_config_file
 from pants.core.util_rules.external_tool import download_external_tool
 from pants.core.util_rules.source_files import SourceFilesRequest, determine_source_files
 from pants.engine.collection import Collection
-from pants.engine.fs import CreateDigest, FileContent, MergeDigests
+from pants.engine.fs import (
+    EMPTY_DIGEST,
+    CreateDigest,
+    FileContent,
+    GlobMatchErrorBehavior,
+    MergeDigests,
+    PathGlobs,
+)
 try:
     # Pants >= 2.30 renamed this call-by-name rule.
     from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
 except ImportError:
     # Pants < 2.30 (e.g. 2.27) — identical call signature, earlier name.
     from pants.engine.internals.graph import coarsened_targets as coarsened_targets_get
-from pants.engine.intrinsics import create_digest, execute_process, merge_digests
+from pants.engine.intrinsics import (
+    create_digest,
+    execute_process,
+    merge_digests,
+    path_globs_to_digest,
+)
 from pants.engine.platform import Platform
 from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, implicitly, rule
@@ -50,7 +62,7 @@ from pants.engine.target import CoarsenedTargets, CoarsenedTargetsRequest, Field
 from pants.engine.unions import UnionRule
 from pants.util.logging import LogLevel
 from pants.util.ordered_set import FrozenOrderedSet, OrderedSet
-from pants.util.strutil import pluralize
+from pants.util.strutil import pluralize, softwrap
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +208,29 @@ async def pyrefly_typecheck_partition(
         )
     )
 
+    # Optionally materialize a baseline file so Pyrefly reports only errors NEW since it was taken.
+    baseline_args: list[str] = []
+    baseline_digest = EMPTY_DIGEST
+    if pyrefly.baseline:
+        baseline_digest = await path_globs_to_digest(
+            PathGlobs(
+                [pyrefly.baseline],
+                glob_match_error_behavior=GlobMatchErrorBehavior.ignore,
+            )
+        )
+        if baseline_digest != EMPTY_DIGEST:
+            baseline_args = [f"--baseline={pyrefly.baseline}"]
+        else:
+            logger.warning(
+                softwrap(
+                    f"""
+                    `[pyrefly].baseline` is set to `{pyrefly.baseline}`, but that file does not
+                    exist. Run `pants pyrefly-update-baseline` to create it; checking without a
+                    baseline for now.
+                    """
+                )
+            )
+
     # Pass the files to check via an argfile rather than argv, so we never hit OS command-line
     # length limits on targets with many files (Pyrefly reads `@<file>`, like other clap CLIs).
     file_list_path = "__pyrefly_files.txt"
@@ -211,6 +246,7 @@ async def pyrefly_typecheck_partition(
                 config_file_snapshot.snapshot.digest,
                 requirements_venv_pex.digest,
                 file_list_digest,
+                baseline_digest,
             )
         )
     )
@@ -235,6 +271,7 @@ async def pyrefly_typecheck_partition(
     # relative to the sandbox cwd; both are materialized into the input digest above.
     if pyrefly.config:
         argv.append(f"--config={pyrefly.config}")
+    argv.extend(baseline_args)
     # User-provided args (can override any of the above).
     argv.extend(pyrefly.args)
     # The files to report on, passed via the argfile created above.

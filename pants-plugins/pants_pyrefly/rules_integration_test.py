@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest  # pants: no-infer-dep
 
 from pants_pyrefly.register import rules as pyrefly_register_rules
@@ -208,3 +210,40 @@ def test_args_passthrough(rule_runner: PythonRuleRunner) -> None:
         rule_runner, [tgt], extra_args=["--pyrefly-args=--ignore-missing-imports=*"]
     )
     assert result[0].exit_code == 0
+
+
+def test_baseline_gating(rule_runner: PythonRuleRunner) -> None:
+    # A baseline that records the (only) error in f.py; `--baseline` should then report 0 new.
+    baseline = json.dumps(
+        {
+            "errors": [
+                {
+                    "line": 1,
+                    "column": 10,
+                    "stop_line": 1,
+                    "stop_column": 15,
+                    "path": "src/project/f.py",
+                    "code": -2,
+                    "name": "bad-assignment",
+                    "description": "`Literal['bad']` is not assignable to `int`",
+                    "concise_description": "`Literal['bad']` is not assignable to `int`",
+                    "severity": "error",
+                }
+            ]
+        }
+    )
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "bad"\n',
+            "src/project/BUILD": "python_sources()",
+            # The legacy preset is needed for a bad-assignment to be flagged at all.
+            "pyrefly.toml": 'preset = "legacy"\n',
+            "pyrefly-baseline.json": baseline,
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    # Without a baseline, the error is reported.
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
+    # With a baseline that covers it, the error is gated.
+    gated = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-baseline=pyrefly-baseline.json"])
+    assert gated[0].exit_code == 0

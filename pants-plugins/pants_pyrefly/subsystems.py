@@ -110,6 +110,17 @@ class Pyrefly(TemplatedExternalTool):
         ),
     )
 
+    baseline = FileOption(
+        default=None,
+        help=help_text(
+            """
+            Path to a Pyrefly baseline JSON file. When set, `pants check` reports only type errors
+            introduced *after* the baseline was taken — handy for adopting Pyrefly on code that
+            already has errors. Create or refresh it with `pants pyrefly-update-baseline`.
+            """
+        ),
+    )
+
     _interpreter_constraints = StrListOption(
         advanced=True,
         default=["CPython>=3.9,<3.15"],
