@@ -35,14 +35,14 @@ from pants.core.util_rules.config_files import find_config_file
 from pants.core.util_rules.external_tool import download_external_tool
 from pants.core.util_rules.source_files import SourceFilesRequest, determine_source_files
 from pants.engine.collection import Collection
-from pants.engine.fs import MergeDigests
+from pants.engine.fs import CreateDigest, FileContent, MergeDigests
 try:
     # Pants >= 2.30 renamed this call-by-name rule.
     from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
 except ImportError:
     # Pants < 2.30 (e.g. 2.27) — identical call signature, earlier name.
     from pants.engine.internals.graph import coarsened_targets as coarsened_targets_get
-from pants.engine.intrinsics import execute_process, merge_digests
+from pants.engine.intrinsics import create_digest, execute_process, merge_digests
 from pants.engine.platform import Platform
 from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, implicitly, rule
@@ -196,6 +196,13 @@ async def pyrefly_typecheck_partition(
         )
     )
 
+    # Pass the files to check via an argfile rather than argv, so we never hit OS command-line
+    # length limits on targets with many files (Pyrefly reads `@<file>`, like other clap CLIs).
+    file_list_path = "__pyrefly_files.txt"
+    file_list_digest = await create_digest(
+        CreateDigest([FileContent(file_list_path, "\n".join(root_sources.snapshot.files).encode())])
+    )
+
     input_digest = await merge_digests(
         MergeDigests(
             (
@@ -203,6 +210,7 @@ async def pyrefly_typecheck_partition(
                 transitive_sources.source_files.snapshot.digest,
                 config_file_snapshot.snapshot.digest,
                 requirements_venv_pex.digest,
+                file_list_digest,
             )
         )
     )
@@ -221,14 +229,16 @@ async def pyrefly_typecheck_partition(
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
+    if pyrefly.output_format:
+        argv.append(f"--output-format={pyrefly.output_format}")
     # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
     # relative to the sandbox cwd; both are materialized into the input digest above.
     if pyrefly.config:
         argv.append(f"--config={pyrefly.config}")
     # User-provided args (can override any of the above).
     argv.extend(pyrefly.args)
-    # The files to actually report on.
-    argv.extend(root_sources.snapshot.files)
+    # The files to report on, passed via the argfile created above.
+    argv.append(f"@{file_list_path}")
 
     process_result = await execute_process(
         Process(

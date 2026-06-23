@@ -18,6 +18,7 @@ from pants.option.option_types import (
     FileOption,
     SkipOption,
     StrListOption,
+    StrOption,
 )
 from pants.util.strutil import help_text
 
@@ -55,6 +56,17 @@ class Pyrefly(TemplatedExternalTool):
 
     skip = SkipOption("check")
     args = ArgsListOption(example="--python-version 3.12")
+
+    output_format = StrOption(
+        default=None,
+        help=help_text(
+            """
+            Override Pyrefly's error output format: one of `min-text`, `full-text`, `json`,
+            `github` (GitHub Actions annotations), `junit-xml`, or `omit-errors`. Defaults to
+            Pyrefly's own default.
+            """
+        ),
+    )
 
     extra_type_stubs = StrListOption(
         advanced=True,
