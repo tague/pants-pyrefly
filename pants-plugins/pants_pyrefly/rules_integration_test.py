@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest  # pants: no-infer-dep
 
+from pants_pyrefly.goals import PyreflyUpdateBaseline
 from pants_pyrefly.register import rules as pyrefly_register_rules
 from pants_pyrefly.rules import PyreflyFieldSet, PyreflyRequest
 
@@ -245,5 +247,31 @@ def test_baseline_gating(rule_runner: PythonRuleRunner) -> None:
     # Without a baseline, the error is reported.
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
     # With a baseline that covers it, the error is gated.
+    gated = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-baseline=pyrefly-baseline.json"])
+    assert gated[0].exit_code == 0
+
+
+def test_update_baseline_roundtrip(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "bad"\n',
+            "src/project/BUILD": "python_sources()",
+            "pyrefly.toml": 'preset = "legacy"\n',
+        }
+    )
+    # 1) The goal generates the baseline file (recording the existing error).
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=["--pyrefly-baseline=pyrefly-baseline.json", "src/project::"],
+        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+    )
+    assert result.exit_code == 0
+    baseline_path = os.path.join(rule_runner.build_root, "pyrefly-baseline.json")
+    assert os.path.exists(baseline_path)
+    with open(baseline_path) as fh:
+        assert len(json.load(fh)["errors"]) >= 1
+
+    # 2) With that baseline, `check` reports 0 new errors.
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
     gated = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-baseline=pyrefly-baseline.json"])
     assert gated[0].exit_code == 0

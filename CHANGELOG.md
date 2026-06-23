@@ -19,6 +19,8 @@ Initial release.
   passed through to Pyrefly via `--config`.
 - The list of files to check is passed to Pyrefly via an argfile, so large targets never hit OS
   command-line length limits.
+- Incremental adoption: `[pyrefly].baseline` makes `check` report only errors new since the
+  baseline, and the `pants pyrefly-update-baseline` goal records/refreshes that baseline file.
 - Supports Pants `2.27`–`2.32` from a single codebase, via version-conditional imports for the
   rules-API changes at 2.30 (`coarsened_targets` → `resolve_coarsened_targets`) and the
   `CheckSubsystem.default_process_cache_scope` addition. Verified on 2.27 and 2.32.

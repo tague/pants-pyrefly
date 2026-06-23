@@ -110,7 +110,9 @@ class Pyrefly(TemplatedExternalTool):
         ),
     )
 
-    baseline = FileOption(
+    # Deliberately a StrOption, not a FileOption: the path need not exist yet (it is created by
+    # `pants pyrefly-update-baseline`), and FileOption validates existence at option-parse time.
+    baseline = StrOption(
         default=None,
         help=help_text(
             """

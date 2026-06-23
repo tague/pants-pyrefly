@@ -60,6 +60,7 @@ pants check path/to/dir::      # type-check a subtree
 | `output_format` | `--pyrefly-output-format` | Override Pyrefly's output format: `min-text`, `full-text`, `json`, `github`, `junit-xml`, `omit-errors`. |
 | `config` | `--pyrefly-config` | Path to a `pyrefly.toml` / `pyproject.toml` (disables discovery). |
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
+| `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |
 | `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. |
 
 Opt a target out of Pyrefly:
@@ -67,6 +68,26 @@ Opt a target out of Pyrefly:
 ```python
 python_sources(skip_pyrefly=True)
 ```
+
+## Incremental adoption (baseline)
+
+Adopting Pyrefly on a codebase that already has type errors? Record them in a baseline so `check`
+only fails on *new* errors:
+
+```bash
+pants pyrefly-update-baseline ::   # writes the file named by [pyrefly].baseline
+pants check ::                     # now reports only errors introduced since the baseline
+```
+
+Configure the path (and commit the baseline file):
+
+```toml
+[pyrefly]
+baseline = "build-support/pyrefly-baseline.json"
+```
+
+Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
+Pyrefly's own (lenient by design, so it survives code churn).
 
 ## How import resolution works
 

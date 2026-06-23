@@ -135,17 +135,20 @@ async def pyrefly_determine_partitions(
     )
 
 
-@rule(
-    desc="Pyrefly typecheck each partition based on its interpreter_constraints",
-    level=LogLevel.DEBUG,
-)
-async def pyrefly_typecheck_partition(
+# Fixed sandbox path where `--update-baseline` writes the baseline; the update-baseline goal
+# relocates it to the user's configured `[pyrefly].baseline` path on write-back.
+_BASELINE_OUTPUT = "__pyrefly_baseline_out.json"
+
+
+async def _setup_pyrefly_process(
     partition: PyreflyPartition,
     pyrefly: Pyrefly,
-    check_subsystem: CheckSubsystem,
     platform: Platform,
     python_setup: PythonSetup,
-) -> CheckResult:
+    *,
+    update_baseline: bool,
+    cache_scope: ProcessCacheScope,
+) -> Process:
     # Gather, concurrently:
     #   - the Pyrefly binary itself,
     #   - the root source files we are reporting on,
@@ -208,10 +211,15 @@ async def pyrefly_typecheck_partition(
         )
     )
 
-    # Optionally materialize a baseline file so Pyrefly reports only errors NEW since it was taken.
+    # Baseline handling. In `update` mode we (re)write a baseline to a fixed sandbox path and
+    # capture it; otherwise we materialize the user's baseline (if any) and gate against it.
     baseline_args: list[str] = []
     baseline_digest = EMPTY_DIGEST
-    if pyrefly.baseline:
+    output_files: tuple[str, ...] = ()
+    if update_baseline:
+        baseline_args = [f"--baseline={_BASELINE_OUTPUT}", "--update-baseline"]
+        output_files = (_BASELINE_OUTPUT,)
+    elif pyrefly.baseline:
         baseline_digest = await path_globs_to_digest(
             PathGlobs(
                 [pyrefly.baseline],
@@ -277,23 +285,42 @@ async def pyrefly_typecheck_partition(
     # The files to report on, passed via the argfile created above.
     argv.append(f"@{file_list_path}")
 
-    process_result = await execute_process(
-        Process(
-            argv=tuple(argv),
-            input_digest=input_digest,
-            immutable_input_digests={tool_key: downloaded_pyrefly.digest},
-            append_only_caches=requirements_venv_pex.append_only_caches or {},
-            description=f"Run Pyrefly on {pluralize(len(root_sources.snapshot.files), 'file')}.",
-            level=LogLevel.DEBUG,
-            # `default_process_cache_scope` (which honors `--force`) exists on Pants >= 2.30;
-            # on 2.27 fall back to the normal "cache successful runs" scope.
-            cache_scope=getattr(
-                check_subsystem, "default_process_cache_scope", ProcessCacheScope.SUCCESSFUL
-            ),
-        ),
-        **implicitly(),
+    return Process(
+        argv=tuple(argv),
+        input_digest=input_digest,
+        immutable_input_digests={tool_key: downloaded_pyrefly.digest},
+        append_only_caches=requirements_venv_pex.append_only_caches or {},
+        output_files=output_files,
+        description=f"Run Pyrefly on {pluralize(len(root_sources.snapshot.files), 'file')}.",
+        level=LogLevel.DEBUG,
+        cache_scope=cache_scope,
     )
 
+
+@rule(
+    desc="Pyrefly typecheck each partition based on its interpreter_constraints",
+    level=LogLevel.DEBUG,
+)
+async def pyrefly_typecheck_partition(
+    partition: PyreflyPartition,
+    pyrefly: Pyrefly,
+    check_subsystem: CheckSubsystem,
+    platform: Platform,
+    python_setup: PythonSetup,
+) -> CheckResult:
+    process = await _setup_pyrefly_process(
+        partition,
+        pyrefly,
+        platform,
+        python_setup,
+        update_baseline=False,
+        # `default_process_cache_scope` (which honors `--force`) exists on Pants >= 2.30;
+        # on 2.27 fall back to the normal "cache successful runs" scope.
+        cache_scope=getattr(
+            check_subsystem, "default_process_cache_scope", ProcessCacheScope.SUCCESSFUL
+        ),
+    )
+    process_result = await execute_process(process, **implicitly())
     return CheckResult.from_fallible_process_result(
         process_result,
         partition_description=partition.description(),
