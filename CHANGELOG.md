@@ -30,6 +30,7 @@ Initial release.
 - Supports Pants `2.27`–`2.32` from a single codebase, via version-conditional imports for the
   rules-API changes at 2.30 (`coarsened_targets` → `resolve_coarsened_targets`) and the
   `CheckSubsystem.default_process_cache_scope` addition. Verified on 2.27 and 2.32.
-- The published wheel is pure-Python (`Requires-Python: >=3.11`) and carries **no `pantsbuild.pants`
-  dependency** (Pants provides itself at runtime, and is no longer on PyPI), so one release installs
-  across the whole supported range. Verified end-to-end via a `plugins=["… @ file://…whl"]` install.
+- The published wheel is pure-Python (`Requires-Python: >=3.12`) and carries **no `pantsbuild.pants`
+  dependency** (Pants provides itself at runtime, and is no longer on PyPI). It installs into any
+  Pants on CPython 3.12+ (Pants 2.27, on CPython 3.11, uses the from-source install). Verified
+  end-to-end via a `plugins=["… @ file://…whl"]` install.

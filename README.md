@@ -11,9 +11,10 @@ that imports resolve correctly.
 
 - **Pants 2.27–2.32.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
   (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.32.
-- The **published wheel** is pure-Python — `Requires-Python: >=3.11`, with **no `pantsbuild.pants`
-  dependency** (Pants provides itself at runtime) — so a single release installs into any supported
-  Pants, from 2.27 (CPython 3.11) through 2.32 (CPython 3.14).
+- The **published wheel** is pure-Python — `Requires-Python: >=3.12`, with **no `pantsbuild.pants`
+  dependency** (Pants provides itself at runtime) — so it installs into any Pants whose runtime is
+  CPython 3.12+ (e.g. 2.32 → CPython 3.14). **Pants 2.27** runs on CPython 3.11, below the floor —
+  install **from source** there (see [Installation](#installation)); the plugin code still supports it.
 
 ## Installation
 
@@ -30,8 +31,9 @@ backend_packages.add = [
 
 ### From source (in-repo)
 
-Prefer to vendor the plugin — for rapid iteration, or to pin to an exact source state? Consume it
-the way in-repo plugins are normally loaded: copy `pants-plugins/pants_pyrefly/` into your repo and:
+Prefer to vendor the plugin — for rapid iteration, to pin to an exact source state, or to run on
+**Pants 2.27** (its CPython 3.11 runtime is below the published wheel's floor)? Consume it the way
+in-repo plugins are normally loaded: copy `pants-plugins/pants_pyrefly/` into your repo and:
 
 ```toml
 [GLOBAL]
