@@ -104,6 +104,15 @@ For third-party imports, point your editor's interpreter at a venv (e.g.
 `pants export --resolve=python-default`). If your Pyrefly config lives in `pyproject.toml`
 `[tool.pyrefly]`, the goal prints the keys to add instead of writing a shadowing `pyrefly.toml`.
 
+## Type coverage
+
+Track typing progress — useful as a migration ratchet:
+
+```bash
+pants pyrefly-coverage ::                                    # prints overall % typed
+pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::   # also fails if below 80%
+```
+
 ## How import resolution works
 
 - **First-party code:** every source root is passed to Pyrefly via `--search-path` (the analogue of

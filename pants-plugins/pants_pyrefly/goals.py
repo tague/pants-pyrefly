@@ -32,6 +32,7 @@ from pants.engine.fs import (
     PathGlobs,
     Workspace,
 )
+from pants.engine.console import Console
 from pants.engine.goal import Goal, GoalSubsystem
 from pants.engine.intrinsics import (
     create_digest,
@@ -44,6 +45,7 @@ from pants.engine.process import ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, goal_rule, implicitly
 from pants.engine.target import AllTargets, Targets
 from pants.engine.unions import UnionRule
+from pants.option.option_types import FloatOption
 from pants.util.strutil import softwrap
 
 logger = logging.getLogger(__name__)
@@ -221,6 +223,97 @@ async def pyrefly_lsp_config(
         f"third-party imports."
     )
     return PyreflyLspConfig(exit_code=0)
+
+
+# ---
+# `pyrefly-coverage`
+# ---
+
+
+class PyreflyCoverageSubsystem(GoalSubsystem):
+    name = "pyrefly-coverage"
+    help = softwrap(
+        """
+        Report Pyrefly type coverage — the share of typable symbols that have a non-`Any` type —
+        across the targeted Python sources.
+        """
+    )
+
+    fail_under = FloatOption(
+        default=None,
+        help="If set, exit non-zero when overall type coverage is below this percentage (0-100).",
+    )
+
+
+class PyreflyCoverage(Goal):
+    subsystem_cls = PyreflyCoverageSubsystem
+    environment_behavior = Goal.EnvironmentBehavior.LOCAL_ONLY
+
+
+@goal_rule
+async def pyrefly_coverage(
+    targets: Targets,
+    pyrefly: Pyrefly,
+    coverage_subsystem: PyreflyCoverageSubsystem,
+    console: Console,
+    platform: Platform,
+    python_setup: PythonSetup,
+) -> PyreflyCoverage:
+    field_sets = tuple(
+        PyreflyFieldSet.create(tgt)
+        for tgt in targets
+        if PyreflyFieldSet.is_applicable(tgt) and not PyreflyFieldSet.opt_out(tgt)
+    )
+    if not field_sets:
+        logger.warning("No Pyrefly-applicable targets in scope.")
+        return PyreflyCoverage(exit_code=0)
+
+    partitions = await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
+    processes = await concurrently(
+        _setup_pyrefly_process(
+            partition,
+            pyrefly,
+            platform,
+            python_setup,
+            subcommand=("coverage", "report"),
+            cache_scope=ProcessCacheScope.SUCCESSFUL,
+        )
+        for partition in partitions
+    )
+    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+
+    total_typable = 0
+    total_typed = 0
+    for result in results:
+        if result.exit_code != 0:
+            logger.error(
+                f"Pyrefly coverage failed (exit {result.exit_code}):\n"
+                f"{result.stderr.decode(errors='replace')}"
+            )
+            return PyreflyCoverage(exit_code=result.exit_code)
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            logger.error(
+                "Could not parse Pyrefly coverage output as JSON:\n"
+                f"{result.stdout.decode(errors='replace')[:500]}"
+            )
+            return PyreflyCoverage(exit_code=1)
+        for module_report in report.get("module_reports", []):
+            for symbol in module_report.get("symbol_reports", []):
+                total_typable += symbol.get("n_typable", 0)
+                total_typed += symbol.get("n_typed", 0)
+
+    pct = (100.0 * total_typed / total_typable) if total_typable else 100.0
+    console.print_stdout(
+        f"Pyrefly type coverage: {pct:.1f}% ({total_typed}/{total_typable} typable symbols)"
+    )
+    if coverage_subsystem.fail_under is not None and pct < coverage_subsystem.fail_under:
+        console.print_stderr(
+            f"Type coverage {pct:.1f}% is below the required {coverage_subsystem.fail_under}%."
+        )
+        return PyreflyCoverage(exit_code=1)
+    return PyreflyCoverage(exit_code=0)
 
 
 def rules() -> Iterable[Rule | UnionRule]:

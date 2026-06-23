@@ -147,7 +147,8 @@ async def _setup_pyrefly_process(
     platform: Platform,
     python_setup: PythonSetup,
     *,
-    update_baseline: bool,
+    subcommand: tuple[str, ...] = ("check",),
+    update_baseline: bool = False,
     cache_scope: ProcessCacheScope,
 ) -> Process:
     # Gather, concurrently:
@@ -212,15 +213,16 @@ async def _setup_pyrefly_process(
         )
     )
 
-    # Baseline handling. In `update` mode we (re)write a baseline to a fixed sandbox path and
-    # capture it; otherwise we materialize the user's baseline (if any) and gate against it.
+    # Baseline handling (check only). In `update` mode we (re)write a baseline to a fixed sandbox
+    # path and capture it; otherwise we materialize the user's baseline (if set) and gate on it.
+    is_check = subcommand == ("check",)
     baseline_args: list[str] = []
     baseline_digest = EMPTY_DIGEST
     output_files: tuple[str, ...] = ()
     if update_baseline:
         baseline_args = [f"--baseline={_BASELINE_OUTPUT}", "--update-baseline"]
         output_files = (_BASELINE_OUTPUT,)
-    elif pyrefly.baseline:
+    elif is_check and pyrefly.baseline:
         baseline_digest = await path_globs_to_digest(
             PathGlobs(
                 [pyrefly.baseline],
@@ -267,25 +269,27 @@ async def _setup_pyrefly_process(
         python_setup.interpreter_versions_universe
     )
 
-    argv: list[str] = [exe_path, "check"]
+    argv: list[str] = [exe_path, *subcommand]
     # First-party import roots (the analogue of MYPYPATH / sys.path).
     argv.extend(f"--search-path={source_root}" for source_root in transitive_sources.source_roots)
     # Third-party deps + interpreter introspection.
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
-    if pyrefly.output_format:
-        argv.append(f"--output-format={pyrefly.output_format}")
-    if pyrefly.min_severity:
-        argv.append(f"--min-severity={pyrefly.min_severity}")
-    argv.extend(f"--only={error_kind}" for error_kind in pyrefly.only)
     # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
     # relative to the sandbox cwd; both are materialized into the input digest above.
     if pyrefly.config:
         argv.append(f"--config={pyrefly.config}")
-    argv.extend(baseline_args)
-    # User-provided args (can override any of the above).
-    argv.extend(pyrefly.args)
+    if is_check:
+        # `check`-only flags; `coverage report`/`check` do not accept these.
+        if pyrefly.output_format:
+            argv.append(f"--output-format={pyrefly.output_format}")
+        if pyrefly.min_severity:
+            argv.append(f"--min-severity={pyrefly.min_severity}")
+        argv.extend(f"--only={error_kind}" for error_kind in pyrefly.only)
+        argv.extend(baseline_args)
+        # User-provided args (can override any of the above).
+        argv.extend(pyrefly.args)
     # The files to report on, passed via the argfile created above.
     argv.append(f"@{file_list_path}")
 

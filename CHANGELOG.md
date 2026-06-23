@@ -25,6 +25,8 @@ Initial release.
   the Pyrefly editor/LSP resolves first-party imports the way Pants does.
 - Triage controls `[pyrefly].min_severity` and `[pyrefly].only`; and `check` now flags a Pyrefly
   tool failure (an exit code other than 0/1) distinctly from ordinary type errors.
+- `pants pyrefly-coverage` reports overall type coverage (% of typable symbols typed), with an
+  optional `--pyrefly-coverage-fail-under` threshold to ratchet/gate it.
 - Supports Pants `2.27`–`2.32` from a single codebase, via version-conditional imports for the
   rules-API changes at 2.30 (`coarsened_targets` → `resolve_coarsened_targets`) and the
   `CheckSubsystem.default_process_cache_scope` addition. Verified on 2.27 and 2.32.

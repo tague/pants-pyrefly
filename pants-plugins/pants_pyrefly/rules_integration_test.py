@@ -8,7 +8,7 @@ import os
 
 import pytest  # pants: no-infer-dep
 
-from pants_pyrefly.goals import PyreflyLspConfig, PyreflyUpdateBaseline
+from pants_pyrefly.goals import PyreflyCoverage, PyreflyLspConfig, PyreflyUpdateBaseline
 from pants_pyrefly.register import rules as pyrefly_register_rules
 from pants_pyrefly.rules import PyreflyFieldSet, PyreflyRequest
 
@@ -292,3 +292,50 @@ def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
         content = fh.read()
     assert "search-path" in content
     assert "python-version" in content
+
+
+def test_coverage_goal(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": (
+                "def typed(x: int) -> int:\n    return x\n\ndef untyped(x):\n    return x\n"
+            ),
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    reported = rule_runner.run_goal_rule(
+        PyreflyCoverage, args=["src/project::"], env_inherit=_ENV_INHERIT
+    )
+    assert reported.exit_code == 0
+    assert "coverage" in reported.stdout.lower()
+    # The untyped function keeps coverage below 100%, so a 100% floor must fail.
+    gated = rule_runner.run_goal_rule(
+        PyreflyCoverage,
+        args=["--pyrefly-coverage-fail-under=100", "src/project::"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert gated.exit_code == 1
+
+
+def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> None:
+    # Two targets with different interpreter constraints produce two partitions; the merged
+    # baseline must contain errors from both.
+    rule_runner.write_files(
+        {
+            "src/a/f.py": 'x: int = "bad"\n',
+            "src/a/BUILD": "python_sources(interpreter_constraints=['==3.11.*'])",
+            "src/b/g.py": 'y: int = "bad"\n',
+            "src/b/BUILD": "python_sources(interpreter_constraints=['==3.12.*'])",
+            "pyrefly.toml": 'preset = "legacy"\n',
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=["--pyrefly-baseline=bl.json", "src::"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        paths = {error["path"] for error in json.load(fh)["errors"]}
+    assert "src/a/f.py" in paths
+    assert "src/b/g.py" in paths
