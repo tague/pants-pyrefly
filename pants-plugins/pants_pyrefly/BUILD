@@ -4,9 +4,6 @@
 python_sources(
     resolve="pants-plugins",
     interpreter_constraints=["==3.14.*"],
-    # We don't (yet) run Pyrefly on the plugin's own sources, which lean heavily on the
-    # `pantsbuild.pants` API. Verification happens via the integration tests instead.
-    skip_pyrefly=True,
 )
 
 python_tests(
