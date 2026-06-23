@@ -68,6 +68,26 @@ class Pyrefly(TemplatedExternalTool):
         ),
     )
 
+    min_severity = StrOption(
+        default=None,
+        help=help_text(
+            """
+            Only display errors at or above this severity: one of `ignore`, `info`, `warn`, or
+            `error`.
+            """
+        ),
+    )
+
+    only = StrListOption(
+        default=[],
+        help=help_text(
+            """
+            Only report these Pyrefly error kinds (e.g. `bad-assignment`, `missing-attribute`),
+            filtering out all others. Useful for triaging one category at a time.
+            """
+        ),
+    )
+
     extra_type_stubs = StrListOption(
         advanced=True,
         default=[],

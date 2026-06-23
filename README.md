@@ -58,6 +58,8 @@ pants check path/to/dir::      # type-check a subtree
 | `args` | `--pyrefly-args` | Extra args passed to Pyrefly, e.g. `--pyrefly-args='--python-version 3.12'`. |
 | `extra_type_stubs` | `--pyrefly-extra-type-stubs` | Stub-only packages to add to the type-check environment without making them runtime deps, e.g. `types-requests`, `sqlalchemy2-stubs==0.0.2a38`. Resolved directly, so pin versions for reproducibility. |
 | `output_format` | `--pyrefly-output-format` | Override Pyrefly's output format: `min-text`, `full-text`, `json`, `github`, `junit-xml`, `omit-errors`. |
+| `min_severity` | `--pyrefly-min-severity` | Only show errors at/above this severity (`ignore`/`info`/`warn`/`error`). |
+| `only` | `--pyrefly-only` | Only report these error kinds (e.g. `bad-assignment`); handy for triage. |
 | `config` | `--pyrefly-config` | Path to a `pyrefly.toml` / `pyproject.toml` (disables discovery). |
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
 | `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |

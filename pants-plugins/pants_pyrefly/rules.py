@@ -275,6 +275,9 @@ async def _setup_pyrefly_process(
         argv.append(f"--python-version={python_version}")
     if pyrefly.output_format:
         argv.append(f"--output-format={pyrefly.output_format}")
+    if pyrefly.min_severity:
+        argv.append(f"--min-severity={pyrefly.min_severity}")
+    argv.extend(f"--only={error_kind}" for error_kind in pyrefly.only)
     # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
     # relative to the sandbox cwd; both are materialized into the input digest above.
     if pyrefly.config:
@@ -321,6 +324,18 @@ async def pyrefly_typecheck_partition(
         ),
     )
     process_result = await execute_process(process, **implicitly())
+    # Exit 0 == clean, 1 == type errors found. Anything else (e.g. 3, or a 101 panic) is a Pyrefly
+    # tool failure, not type errors — flag it so users don't misread a crash as code problems.
+    if process_result.exit_code not in (0, 1):
+        logger.warning(
+            softwrap(
+                f"""
+                Pyrefly exited with code {process_result.exit_code} on partition
+                ({partition.description()}). This usually indicates a Pyrefly tool error rather than
+                type errors in your code; see the output above.
+                """
+            )
+        )
     return CheckResult.from_fallible_process_result(
         process_result,
         partition_description=partition.description(),
