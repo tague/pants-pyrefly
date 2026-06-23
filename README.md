@@ -56,6 +56,7 @@ pants check path/to/dir::      # type-check a subtree
 | --- | --- | --- |
 | `skip` | `--pyrefly-skip` / `PANTS_PYREFLY_SKIP` | Don't run Pyrefly during `check`. |
 | `args` | `--pyrefly-args` | Extra args passed to Pyrefly, e.g. `--pyrefly-args='--python-version 3.12'`. |
+| `extra_type_stubs` | `--pyrefly-extra-type-stubs` | Stub-only packages to add to the type-check environment without making them runtime deps, e.g. `types-requests`, `sqlalchemy2-stubs==0.0.2a38`. Resolved directly, so pin versions for reproducibility. |
 | `config` | `--pyrefly-config` | Path to a `pyrefly.toml` / `pyproject.toml` (disables discovery). |
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
 | `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. |

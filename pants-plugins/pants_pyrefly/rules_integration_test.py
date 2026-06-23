@@ -139,3 +139,23 @@ def test_third_party_import_resolves(rule_runner: PythonRuleRunner) -> None:
     result = run_pyrefly(rule_runner, [tgt])
     assert len(result) == 1
     assert result[0].exit_code == 0
+
+
+def test_extra_type_stubs(rule_runner: PythonRuleRunner) -> None:
+    # `extra_type_stubs` resolves stub-only packages and merges them into the environment Pyrefly
+    # inspects, without them becoming runtime dependencies. Assert the option is wired end to end:
+    # the stub requirement resolves, the venv is built, and the run succeeds. (We don't assert a
+    # missing-import contrast, because Pyrefly bundles typeshed's third-party stubs for many common
+    # packages — e.g. PyYAML resolves even with no stubs provided.)
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "import yaml  # pants: no-infer-dep\n\nvalue = yaml.safe_load('a: 1')\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    result = run_pyrefly(
+        rule_runner, [tgt], extra_args=["--pyrefly-extra-type-stubs=types-PyYAML"]
+    )
+    assert len(result) == 1
+    assert result[0].exit_code == 0

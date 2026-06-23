@@ -22,8 +22,9 @@ from pants.backend.python.util_rules.interpreter_constraints import InterpreterC
 from pants.backend.python.util_rules.partition import (
     _partition_by_interpreter_constraints_and_resolve,
 )
-from pants.backend.python.util_rules.pex import PexRequest, create_pex, create_venv_pex
+from pants.backend.python.util_rules.pex import Pex, PexRequest, create_pex, create_venv_pex
 from pants.backend.python.util_rules.pex_from_targets import RequirementsPexRequest
+from pants.backend.python.util_rules.pex_requirements import PexRequirements
 from pants.backend.python.util_rules.python_sources import (
     PythonSourceFilesRequest,
     prepare_python_sources,
@@ -162,15 +163,34 @@ async def pyrefly_typecheck_partition(
         find_config_file(pyrefly.config_request()),
     )
 
-    # Wrap the third-party requirements in a venv PEX. We point Pyrefly's
-    # `--python-interpreter-path` at this venv's Python so it can discover the third-party
+    # Optionally resolve extra type-stub packages and merge them into the same venv, so Pyrefly
+    # sees their types without them becoming runtime dependencies of the checked code.
+    extra_stub_pexes: list[Pex] = []
+    if pyrefly.extra_type_stubs:
+        extra_stubs_pex = await create_pex(
+            **implicitly(
+                PexRequest(
+                    output_filename="pyrefly_extra_type_stubs.pex",
+                    internal_only=True,
+                    requirements=PexRequirements(
+                        pyrefly.extra_type_stubs,
+                        description_of_origin="the option `[pyrefly].extra_type_stubs`",
+                    ),
+                    interpreter_constraints=partition.interpreter_constraints,
+                )
+            )
+        )
+        extra_stub_pexes = [extra_stubs_pex]
+
+    # Wrap the third-party requirements (plus any extra type stubs) in a venv PEX. We point
+    # Pyrefly's `--python-interpreter-path` at this venv's Python so it can discover the third-party
     # `site-packages` (and the target Python version) exactly the way `import` would at runtime.
     requirements_venv_pex = await create_venv_pex(
         **implicitly(
             PexRequest(
                 output_filename="requirements_venv.pex",
                 internal_only=True,
-                pex_path=[requirements_pex],
+                pex_path=[requirements_pex, *extra_stub_pexes],
                 interpreter_constraints=partition.interpreter_constraints,
             )
         )
@@ -201,6 +221,10 @@ async def pyrefly_typecheck_partition(
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
+    # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
+    # relative to the sandbox cwd; both are materialized into the input digest above.
+    if pyrefly.config:
+        argv.append(f"--config={pyrefly.config}")
     # User-provided args (can override any of the above).
     argv.extend(pyrefly.args)
     # The files to actually report on.

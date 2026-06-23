@@ -56,6 +56,22 @@ class Pyrefly(TemplatedExternalTool):
     skip = SkipOption("check")
     args = ArgsListOption(example="--python-version 3.12")
 
+    extra_type_stubs = StrListOption(
+        advanced=True,
+        default=[],
+        help=help_text(
+            """
+            Extra type-stub requirements to make available to Pyrefly without adding them as
+            runtime dependencies of your code, e.g.
+            `["types-requests", "sqlalchemy2-stubs==0.0.2a38"]`.
+
+            They are resolved and merged into the third-party environment Pyrefly inspects. Pin
+            versions in the requirement strings for reproducible results, since they are resolved
+            directly rather than from a lockfile.
+            """
+        ),
+    )
+
     config = FileOption(
         default=None,
         advanced=True,
