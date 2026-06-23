@@ -159,3 +159,52 @@ def test_extra_type_stubs(rule_runner: PythonRuleRunner) -> None:
     )
     assert len(result) == 1
     assert result[0].exit_code == 0
+
+
+def test_config_discovery(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    # The default `basic` preset does not flag this assignment.
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
+    # A discovered `pyrefly.toml` that raises strictness does.
+    rule_runner.write_files({"pyrefly.toml": 'preset = "legacy"\n'})
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
+
+
+def test_explicit_config_option(rule_runner: PythonRuleRunner) -> None:
+    # A config in a non-standard location is only honored if `[pyrefly].config` is passed through
+    # to Pyrefly as `--config` (the bug this guards against).
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+            "build-support/pyrefly.toml": 'preset = "legacy"\n',
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    result = run_pyrefly(
+        rule_runner, [tgt], extra_args=["--pyrefly-config=build-support/pyrefly.toml"]
+    )
+    assert result[0].exit_code == 1
+
+
+def test_args_passthrough(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "import totally_fake_xyz_123  # pants: no-infer-dep\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    # The missing import fails by default...
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
+    # ...but a forwarded Pyrefly arg suppresses it.
+    result = run_pyrefly(
+        rule_runner, [tgt], extra_args=["--pyrefly-args=--ignore-missing-imports=*"]
+    )
+    assert result[0].exit_code == 0
