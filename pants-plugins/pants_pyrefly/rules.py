@@ -43,6 +43,7 @@ from pants.engine.fs import (
     MergeDigests,
     PathGlobs,
 )
+
 try:
     # Pants >= 2.30 renamed this call-by-name rule.
     from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
@@ -102,7 +103,7 @@ class PyreflyPartitions(Collection[PyreflyPartition]):
 
 
 @rule(
-    desc="Determine if it is necessary to partition Pyrefly's input (interpreter_constraints and resolves)",
+    desc="Partition Pyrefly's input by resolve and interpreter constraints",
     level=LogLevel.DEBUG,
 )
 async def pyrefly_determine_partitions(

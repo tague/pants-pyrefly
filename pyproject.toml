@@ -1,0 +1,8 @@
+# Dev-tooling config for the pants-pyrefly plugin repo.
+# (Packaging metadata lives in the `python_distribution` target, not here.)
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]

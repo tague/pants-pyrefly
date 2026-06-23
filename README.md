@@ -124,9 +124,13 @@ by 2.32). Verified on 2.27 and 2.32; in-between versions use the same modern API
 
 ## Development
 
+This repo dogfoods its own tooling: `ruff` (lint + format) and Pyrefly itself (`check`) run on the
+plugin's sources.
+
 ```bash
 pants generate-lockfiles          # pants-plugins + python-default resolves
-pants check ::                    # run the plugin against testprojects/
+pants fmt lint ::                 # ruff format + check
+pants check ::                    # Pyrefly type-checks the plugin (dogfood) + testprojects/
 pants test ::                     # run the integration tests
 pants package pants-plugins/pants_pyrefly:dist   # build the wheel + sdist into dist/
 ```

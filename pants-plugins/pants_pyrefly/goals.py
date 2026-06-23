@@ -49,9 +49,9 @@ from pants.util.strutil import softwrap
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------------------------------
+# ---
 # `pyrefly-update-baseline`
-# ---------------------------------------------------------------------------------------------------
+# ---
 
 
 class PyreflyUpdateBaselineSubsystem(GoalSubsystem):
@@ -136,9 +136,9 @@ async def pyrefly_update_baseline(
     return PyreflyUpdateBaseline(exit_code=0)
 
 
-# ---------------------------------------------------------------------------------------------------
+# ---
 # `pyrefly-lsp-config`
-# ---------------------------------------------------------------------------------------------------
+# ---
 
 
 class PyreflyLspConfigSubsystem(GoalSubsystem):

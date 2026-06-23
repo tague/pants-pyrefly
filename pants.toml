@@ -5,6 +5,8 @@ backend_packages = [
     "pants.backend.python",
     "pants.backend.plugin_development",
     "pants.backend.experimental.python",
+    "pants.backend.experimental.python.lint.ruff.check",
+    "pants.backend.experimental.python.lint.ruff.format",
     "pants_pyrefly",
 ]
 

@@ -153,14 +153,14 @@ def test_extra_type_stubs(rule_runner: PythonRuleRunner) -> None:
     # packages — e.g. PyYAML resolves even with no stubs provided.)
     rule_runner.write_files(
         {
-            "src/project/f.py": "import yaml  # pants: no-infer-dep\n\nvalue = yaml.safe_load('a: 1')\n",
+            "src/project/f.py": (
+                "import yaml  # pants: no-infer-dep\n\nvalue = yaml.safe_load('a: 1')\n"
+            ),
             "src/project/BUILD": "python_sources()",
         }
     )
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
-    result = run_pyrefly(
-        rule_runner, [tgt], extra_args=["--pyrefly-extra-type-stubs=types-PyYAML"]
-    )
+    result = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-extra-type-stubs=types-PyYAML"])
     assert len(result) == 1
     assert result[0].exit_code == 0
 
@@ -284,9 +284,7 @@ def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
             "src/project/BUILD": "python_sources()",
         }
     )
-    result = rule_runner.run_goal_rule(
-        PyreflyLspConfig, env_inherit={"PATH", "PYENV_ROOT", "HOME"}
-    )
+    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit={"PATH", "PYENV_ROOT", "HOME"})
     assert result.exit_code == 0
     config_path = os.path.join(rule_runner.build_root, "pyrefly.toml")
     assert os.path.exists(config_path)
