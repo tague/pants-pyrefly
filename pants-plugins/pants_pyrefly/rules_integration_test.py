@@ -8,7 +8,7 @@ import os
 
 import pytest  # pants: no-infer-dep
 
-from pants_pyrefly.goals import PyreflyUpdateBaseline
+from pants_pyrefly.goals import PyreflyLspConfig, PyreflyUpdateBaseline
 from pants_pyrefly.register import rules as pyrefly_register_rules
 from pants_pyrefly.rules import PyreflyFieldSet, PyreflyRequest
 
@@ -275,3 +275,22 @@ def test_update_baseline_roundtrip(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
     gated = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-baseline=pyrefly-baseline.json"])
     assert gated[0].exit_code == 0
+
+
+def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyLspConfig, env_inherit={"PATH", "PYENV_ROOT", "HOME"}
+    )
+    assert result.exit_code == 0
+    config_path = os.path.join(rule_runner.build_root, "pyrefly.toml")
+    assert os.path.exists(config_path)
+    with open(config_path) as fh:
+        content = fh.read()
+    assert "search-path" in content
+    assert "python-version" in content

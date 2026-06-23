@@ -89,6 +89,19 @@ baseline = "build-support/pyrefly-baseline.json"
 Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
 Pyrefly's own (lenient by design, so it survives code churn).
 
+## Editor / IDE (LSP)
+
+Pyrefly ships an LSP server, but in a Pants repo your editor doesn't know the source roots. Generate
+a `pyrefly.toml` with them:
+
+```bash
+pants pyrefly-lsp-config        # writes search-path (= your source roots) + python-version
+```
+
+For third-party imports, point your editor's interpreter at a venv (e.g.
+`pants export --resolve=python-default`). If your Pyrefly config lives in `pyproject.toml`
+`[tool.pyrefly]`, the goal prints the keys to add instead of writing a shadowing `pyrefly.toml`.
+
 ## How import resolution works
 
 - **First-party code:** every source root is passed to Pyrefly via `--search-path` (the analogue of

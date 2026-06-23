@@ -21,6 +21,8 @@ Initial release.
   command-line length limits.
 - Incremental adoption: `[pyrefly].baseline` makes `check` report only errors new since the
   baseline, and the `pants pyrefly-update-baseline` goal records/refreshes that baseline file.
+- `pants pyrefly-lsp-config` writes Pants's source roots into `pyrefly.toml` as `search-path`, so
+  the Pyrefly editor/LSP resolves first-party imports the way Pants does.
 - Supports Pants `2.27`–`2.32` from a single codebase, via version-conditional imports for the
   rules-API changes at 2.30 (`coarsened_targets` → `resolve_coarsened_targets`) and the
   `CheckSubsystem.default_process_cache_scope` addition. Verified on 2.27 and 2.32.
