@@ -3,7 +3,7 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-06-23)
 
 Initial release.
 
