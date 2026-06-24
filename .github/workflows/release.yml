@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      # `actions/checkout` needs repo read. Naming any permission drops all the others to
+      # `none`, so `contents: read` must be listed explicitly alongside the OIDC scope.
+      contents: read
       # Required for PyPI Trusted Publishing (OIDC). No API token needed.
       id-token: write
     steps:
