@@ -15,12 +15,12 @@ jobs:
     name: lint / check / test / package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Pants 2.32 runs on CPython 3.14 (the `pants-plugins` resolve targets 3.14). The integration
       # tests also create 3.11 and 3.12 partitions (multi-interpreter baseline merge), so install
       # all three so Pants can find an interpreter for each.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: |
             3.11
