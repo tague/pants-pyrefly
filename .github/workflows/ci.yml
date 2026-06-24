@@ -17,10 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pants 2.32 runs on CPython 3.14, and the `pants-plugins` resolve targets 3.14.
+      # Pants 2.32 runs on CPython 3.14 (the `pants-plugins` resolve targets 3.14). The integration
+      # tests also create 3.11 and 3.12 partitions (multi-interpreter baseline merge), so install
+      # all three so Pants can find an interpreter for each.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: |
+            3.11
+            3.12
+            3.14
 
       - uses: pantsbuild/actions/init-pants@v11
         with:
