@@ -29,13 +29,13 @@ jobs:
           named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
 
       - name: Lint
-        run: pants lint ::
+        run: "pants lint ::"
 
       - name: Check (run Pyrefly on the example project)
-        run: pants check ::
+        run: "pants check ::"
 
       - name: Test
-        run: pants test ::
+        run: "pants test ::"
 
       - name: Package (build the wheel + sdist)
-        run: pants package pants-plugins/pants_pyrefly:dist
+        run: "pants package pants-plugins/pants_pyrefly:dist"
