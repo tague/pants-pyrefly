@@ -55,6 +55,10 @@ pants check ::                     # reports only errors introduced since the ba
 See [Incremental adoption (baseline)](../README.md#incremental-adoption-baseline). Commit the
 baseline file, and re-run `pyrefly-update-baseline` as you fix errors to ratchet it down.
 
+Prefer inline comments over an external baseline? `pants pyrefly-suppress ::` rewrites the targeted
+files in place, adding `# pyrefly: ignore` to each erroring line; `pants pyrefly-suppress
+--pyrefly-suppress-remove-unused ::` strips the ones you no longer need.
+
 ## 4. Track progress with coverage
 
 ```bash

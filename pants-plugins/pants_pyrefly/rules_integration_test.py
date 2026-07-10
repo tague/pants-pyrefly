@@ -8,7 +8,12 @@ import os
 
 import pytest  # pants: no-infer-dep
 
-from pants_pyrefly.goals import PyreflyCoverage, PyreflyLspConfig, PyreflyUpdateBaseline
+from pants_pyrefly.goals import (
+    PyreflyCoverage,
+    PyreflyLspConfig,
+    PyreflySuppress,
+    PyreflyUpdateBaseline,
+)
 from pants_pyrefly.register import rules as pyrefly_register_rules
 from pants_pyrefly.rules import PyreflyFieldSet, PyreflyRequest
 
@@ -385,3 +390,20 @@ def test_tool_failure_distinct_from_type_errors(rule_runner: PythonRuleRunner) -
         rule_runner, [tgt], extra_args=["--pyrefly-args=--definitely-not-a-real-flag"]
     )
     assert result[0].exit_code not in (0, 1)
+
+
+def test_suppress_inserts_ignore_comments(rule_runner: PythonRuleRunner) -> None:
+    # `pyrefly-suppress` rewrites the targeted files in place, adding a `# pyrefly: ignore` for
+    # each current error, and writes them back to the workspace.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "import totally_fake_suppress_xyz  # pants: no-infer-dep\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflySuppress, args=["src/project::"], env_inherit=_ENV_INHERIT
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "src/project/f.py")) as fh:
+        assert "pyrefly: ignore" in fh.read()

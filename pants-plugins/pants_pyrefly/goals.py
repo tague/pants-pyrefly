@@ -29,6 +29,7 @@ from pants.engine.fs import (
     CreateDigest,
     FileContent,
     GlobMatchErrorBehavior,
+    MergeDigests,
     PathGlobs,
     Workspace,
 )
@@ -38,6 +39,7 @@ from pants.engine.intrinsics import (
     create_digest,
     execute_process,
     get_digest_contents,
+    merge_digests,
     path_globs_to_digest,
 )
 from pants.engine.platform import Platform
@@ -45,7 +47,7 @@ from pants.engine.process import ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, goal_rule, implicitly
 from pants.engine.target import AllTargets, Targets
 from pants.engine.unions import UnionRule
-from pants.option.option_types import FloatOption
+from pants.option.option_types import BoolOption, FloatOption
 from pants.util.strutil import softwrap
 
 logger = logging.getLogger(__name__)
@@ -314,6 +316,94 @@ async def pyrefly_coverage(
         )
         return PyreflyCoverage(exit_code=1)
     return PyreflyCoverage(exit_code=0)
+
+
+# ---
+# `pyrefly-suppress`
+# ---
+
+
+class PyreflySuppressSubsystem(GoalSubsystem):
+    name = "pyrefly-suppress"
+    help = softwrap(
+        """
+        Insert inline `# pyrefly: ignore` comments to silence the current Pyrefly errors in the
+        targeted sources (wraps Pyrefly's `suppress`). Useful for adopting Pyrefly on code with
+        pre-existing errors: suppress them now, then remove the comments as you fix them. Edits
+        files in place, so run on a clean working tree.
+        """
+    )
+
+    remove_unused = BoolOption(
+        default=False,
+        help=softwrap(
+            """
+            Instead of adding suppressions, remove `# pyrefly: ignore` comments that are no longer
+            needed (`pyrefly suppress --remove-unused`).
+            """
+        ),
+    )
+
+
+class PyreflySuppress(Goal):
+    subsystem_cls = PyreflySuppressSubsystem
+    environment_behavior = Goal.EnvironmentBehavior.LOCAL_ONLY
+
+
+@goal_rule
+async def pyrefly_suppress(
+    targets: Targets,
+    pyrefly: Pyrefly,
+    suppress_subsystem: PyreflySuppressSubsystem,
+    workspace: Workspace,
+    platform: Platform,
+    python_setup: PythonSetup,
+) -> PyreflySuppress:
+    field_sets = tuple(
+        PyreflyFieldSet.create(tgt)
+        for tgt in targets
+        if PyreflyFieldSet.is_applicable(tgt) and not PyreflyFieldSet.opt_out(tgt)
+    )
+    if not field_sets:
+        logger.warning("No Pyrefly-applicable targets in scope; nothing to suppress.")
+        return PyreflySuppress(exit_code=0)
+
+    partitions = await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
+    subcommand_args = ("--remove-unused",) if suppress_subsystem.remove_unused else ()
+    processes = await concurrently(
+        _setup_pyrefly_process(
+            partition,
+            pyrefly,
+            platform,
+            python_setup,
+            subcommand=("suppress",),
+            subcommand_args=subcommand_args,
+            capture_root_sources=True,
+            cache_scope=ProcessCacheScope.PER_SESSION,
+        )
+        for partition in partitions
+    )
+    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+
+    for result in results:
+        # 0 == nothing to do, 1 == errors were suppressed (both expected). Anything else is a tool
+        # failure; don't write back a partial/garbled edit.
+        if result.exit_code not in (0, 1):
+            logger.error(
+                f"Pyrefly `suppress` exited with code {result.exit_code}; files left unchanged.\n"
+                f"{result.stderr.decode(errors='replace')}"
+            )
+            return PyreflySuppress(exit_code=result.exit_code)
+
+    output_digest = await merge_digests(MergeDigests(result.output_digest for result in results))
+    workspace.write_digest(output_digest)
+    action = (
+        "Removed unused Pyrefly suppressions"
+        if suppress_subsystem.remove_unused
+        else "Applied Pyrefly suppressions"
+    )
+    logger.info(f"{action} across {len(field_sets)} target(s).")
+    return PyreflySuppress(exit_code=0)
 
 
 def rules() -> Iterable[Rule | UnionRule]:

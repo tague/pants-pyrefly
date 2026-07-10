@@ -148,7 +148,9 @@ async def _setup_pyrefly_process(
     python_setup: PythonSetup,
     *,
     subcommand: tuple[str, ...] = ("check",),
+    subcommand_args: tuple[str, ...] = (),
     update_baseline: bool = False,
+    capture_root_sources: bool = False,
     cache_scope: ProcessCacheScope,
 ) -> Process:
     # Gather, concurrently:
@@ -222,6 +224,10 @@ async def _setup_pyrefly_process(
     if update_baseline:
         baseline_args = [f"--baseline={_BASELINE_OUTPUT}", "--update-baseline"]
         output_files = (_BASELINE_OUTPUT,)
+    elif capture_root_sources:
+        # `suppress` rewrites the checked files in place; capture them so the goal can write the
+        # edited sources back to the workspace.
+        output_files = tuple(root_sources.snapshot.files)
     elif is_check and pyrefly.baseline:
         baseline_digest = await path_globs_to_digest(
             PathGlobs(
@@ -290,6 +296,8 @@ async def _setup_pyrefly_process(
         argv.extend(baseline_args)
         # User-provided args (can override any of the above).
         argv.extend(pyrefly.args)
+    # Subcommand-specific flags (e.g. `suppress --remove-unused`), for non-`check` subcommands.
+    argv.extend(subcommand_args)
     # The files to report on, passed via the argfile created above.
     argv.append(f"@{file_list_path}")
 

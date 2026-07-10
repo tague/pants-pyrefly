@@ -94,6 +94,11 @@ baseline = "build-support/pyrefly-baseline.json"
 Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
 Pyrefly's own (lenient by design, so it survives code churn).
 
+**Prefer inline suppressions?** `pants pyrefly-suppress ::` instead rewrites the targeted files in
+place, adding `# pyrefly: ignore` on each current error (Pyrefly's `suppress`); delete them as you
+fix, or run `pants pyrefly-suppress --pyrefly-suppress-remove-unused ::` to strip stale ones. An
+external baseline (JSON) and inline suppressions are two strategies for the same goal — pick one.
+
 ## Migrating from MyPy
 
 Moving a Pants repo off MyPy? See **[docs/migrating-from-mypy.md](docs/migrating-from-mypy.md)** —
