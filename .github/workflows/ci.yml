@@ -44,3 +44,33 @@ jobs:
 
       - name: Package (build the wheel + sdist)
         run: "pants package pants-plugins/pants_pyrefly:dist"
+
+  # Prove the version-conditional rules-API shim on every supported Pants line by consuming the
+  # plugin from source (via pythonpath) and running `check` on a good + a bad file. Lightweight:
+  # no per-version dev lockfiles needed. The full lint/check/test/package suite runs on 2.32 above.
+  smoke:
+    name: smoke (Pants ${{ matrix.pants-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pants-version: ["2.27.0", "2.31.0", "2.32.0"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: |
+            3.11
+            3.12
+            3.14
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: smoke-${{ matrix.pants-version }}-v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      - name: Consumption smoke test (plugin loads + runs via pythonpath)
+        env:
+          PANTS_VERSION: ${{ matrix.pants-version }}
+        run: bash build-support/ci/smoke_test.sh
