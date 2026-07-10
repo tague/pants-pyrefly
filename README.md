@@ -94,6 +94,12 @@ baseline = "build-support/pyrefly-baseline.json"
 Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
 Pyrefly's own (lenient by design, so it survives code churn).
 
+## Migrating from MyPy
+
+Moving a Pants repo off MyPy? See **[docs/migrating-from-mypy.md](docs/migrating-from-mypy.md)** —
+config conversion (`pyrefly init --migrate-from mypy`), running both checkers during the transition,
+baseline-based incremental adoption, and the MyPy-plugin gap (SQLAlchemy et al.).
+
 ## Editor / IDE (LSP)
 
 Pyrefly ships an LSP server, but in a Pants repo your editor doesn't know the source roots. Generate
