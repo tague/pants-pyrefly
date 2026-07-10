@@ -3,6 +3,19 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.2.0 (unreleased)
+
+- `pants pyrefly-suppress` inserts inline `# pyrefly: ignore` comments for the current errors in the
+  targeted sources (wraps Pyrefly's `suppress`); `--pyrefly-suppress-remove-unused` strips stale
+  ones. The inline-comment alternative to the baseline for incremental adoption.
+- **Lowered the published wheel's floor to `Requires-Python: >=3.11`** (was `>=3.12`), so one wheel
+  installs into every supported Pants — 2.27 (CPython 3.11) through 2.32 (CPython 3.14) — and added
+  per-version Python trove classifiers (3.11–3.14).
+- Added a MyPy→Pyrefly migration guide (`docs/migrating-from-mypy.md`).
+- CI now runs a consumption smoke-test matrix across Pants 2.27/2.31/2.32 (proving the version shim
+  on every line), plus tests for lsp-config pyproject protection, `[pyrefly].only`, and the
+  tool-failure exit path.
+
 ## 0.1.0 (2026-06-23)
 
 Initial release.

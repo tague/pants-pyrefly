@@ -24,13 +24,13 @@ python_distribution(
     interpreter_constraints=["==3.14.*"],
     provides=python_artifact(
         name="pants-pyrefly",
-        version="0.1.0",
+        version="0.2.0",
         description="A Pants plugin that runs the Pyrefly type checker in the `check` goal.",
         long_description_content_type="text/markdown",
         license="Apache-2.0",
-        # Pure-Python plugin; wheel floor is CPython 3.12 (decoupled from the build IC above).
-        # Pants 2.27 runs on CPython 3.11, below this floor — install from source there instead.
-        python_requires=">=3.12",
+        # Pure-Python (`py3-none-any`), so it runs on the interpreter of any supported Pants:
+        # 2.27 (CPython 3.11) through 2.32 (CPython 3.14). Floor is decoupled from the build IC.
+        python_requires=">=3.11",
         classifiers=[
             "Intended Audience :: Developers",
             "License :: OSI Approved :: Apache Software License",
@@ -38,6 +38,10 @@ python_distribution(
             "Operating System :: POSIX :: Linux",
             "Programming Language :: Python",
             "Programming Language :: Python :: 3 :: Only",
+            "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
+            "Programming Language :: Python :: 3.13",
+            "Programming Language :: Python :: 3.14",
             "Topic :: Software Development :: Build Tools",
         ],
         keywords=["pants", "pantsbuild", "pants-plugin", "pyrefly", "typecheck"],
