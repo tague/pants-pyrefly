@@ -339,3 +339,49 @@ def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> Non
         paths = {error["path"] for error in json.load(fh)["errors"]}
     assert "src/a/f.py" in paths
     assert "src/b/g.py" in paths
+
+
+def test_lsp_config_respects_pyproject(rule_runner: PythonRuleRunner) -> None:
+    # If Pyrefly config already lives in `pyproject.toml [tool.pyrefly]`, the goal must NOT write a
+    # shadowing `pyrefly.toml` (a standalone file takes precedence and would silently override it).
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": '[tool.pyrefly]\npython-version = "3.12"\n',
+        }
+    )
+    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit=_ENV_INHERIT)
+    assert result.exit_code == 0
+    assert not os.path.exists(os.path.join(rule_runner.build_root, "pyrefly.toml"))
+
+
+def test_only_filters_error_kinds(rule_runner: PythonRuleRunner) -> None:
+    # `[pyrefly].only` restricts reporting to the given error kind(s). A file whose only error is a
+    # missing import passes once we ask Pyrefly to report only an unrelated kind.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "import totally_fake_xyz_123  # pants: no-infer-dep\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
+    filtered = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-only=bad-assignment"])
+    assert filtered[0].exit_code == 0
+
+
+def test_tool_failure_distinct_from_type_errors(rule_runner: PythonRuleRunner) -> None:
+    # A Pyrefly invocation error (an unknown flag) exits with a code other than 0/1; the plugin
+    # surfaces that exit code as-is rather than masking it as ordinary type errors.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "def f(x: int) -> int:\n    return x\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    result = run_pyrefly(
+        rule_runner, [tgt], extra_args=["--pyrefly-args=--definitely-not-a-real-flag"]
+    )
+    assert result[0].exit_code not in (0, 1)
