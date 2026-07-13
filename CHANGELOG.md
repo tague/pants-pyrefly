@@ -3,7 +3,7 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-07-10)
 
 - `pants pyrefly-suppress` inserts inline `# pyrefly: ignore` comments for the current errors in the
   targeted sources (wraps Pyrefly's `suppress`); `--pyrefly-suppress-remove-unused` strips stale
