@@ -42,6 +42,20 @@ backend_packages.add = ["pants.backend.python", "pants_pyrefly"]
 If you keep plugin code in a dedicated `pants-plugins` resolve, add it there and run
 `pants generate-lockfiles`.
 
+## Getting started
+
+Bootstrap a Pyrefly config for the repo (wraps `pyrefly init`). If you already have a MyPy or
+Pyright configuration, it is migrated into the new `pyrefly.toml`:
+
+```bash
+pants pyrefly-init                              # create pyrefly.toml (auto-migrates mypy/pyright)
+pants pyrefly-init --pyrefly-init-migrate-from=mypy   # force migrating from a MyPy config
+```
+
+It refuses to overwrite an existing `pyrefly.toml` (or a `[tool.pyrefly]` table in
+`pyproject.toml`) — remove it first to regenerate. Then run `pants pyrefly-lsp-config` (see
+[Editor / IDE](#editor--ide-lsp)) so your editor resolves first-party imports the way Pants does.
+
 ## Usage
 
 ```bash

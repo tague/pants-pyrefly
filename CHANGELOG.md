@@ -3,6 +3,12 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.0 (unreleased)
+
+- `pants pyrefly-init` bootstraps a Pyrefly config for the repo (wraps `pyrefly init`), migrating an
+  existing MyPy or Pyright configuration when one is found. `--pyrefly-init-migrate-from=<auto|mypy|pyright>`
+  selects the source. It refuses to overwrite an existing config.
+
 ## 0.2.0 (2026-07-10)
 
 - `pants pyrefly-suppress` inserts inline `# pyrefly: ignore` comments for the current errors in the

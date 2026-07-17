@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterable
 
 import toml  # pants: no-infer-dep  (provided by the Pants runtime)
@@ -42,12 +43,14 @@ from pants.engine.intrinsics import (
     merge_digests,
     path_globs_to_digest,
 )
+from pants.core.util_rules.external_tool import download_external_tool
 from pants.engine.platform import Platform
-from pants.engine.process import ProcessCacheScope
+from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, goal_rule, implicitly
 from pants.engine.target import AllTargets, Targets
 from pants.engine.unions import UnionRule
-from pants.option.option_types import BoolOption, FloatOption
+from pants.option.option_types import BoolOption, FloatOption, StrOption
+from pants.util.logging import LogLevel
 from pants.util.strutil import softwrap
 
 logger = logging.getLogger(__name__)
@@ -404,6 +407,131 @@ async def pyrefly_suppress(
     )
     logger.info(f"{action} across {len(field_sets)} target(s).")
     return PyreflySuppress(exit_code=0)
+
+
+# ---
+# `pyrefly-init`
+# ---
+
+_MIGRATE_FROM_CHOICES = ("auto", "mypy", "pyright")
+
+
+class PyreflyInitSubsystem(GoalSubsystem):
+    name = "pyrefly-init"
+    help = softwrap(
+        """
+        Bootstrap a Pyrefly config for this repo by running `pyrefly init`. Writes a `pyrefly.toml`
+        in the build root, migrating an existing MyPy or Pyright configuration when one is found.
+        Run once when adopting Pyrefly. After it writes the config, run `pants pyrefly-lsp-config`
+        to add Pants's source roots so the editor/LSP resolves first-party imports.
+        """
+    )
+
+    migrate_from = StrOption(
+        default=None,
+        help=softwrap(
+            """
+            Which existing type-checker config to migrate from: `auto` (try MyPy, then Pyright),
+            `mypy`, or `pyright`. When unset, Pyrefly's own default (`auto`) is used.
+            """
+        ),
+    )
+
+
+class PyreflyInit(Goal):
+    subsystem_cls = PyreflyInitSubsystem
+    environment_behavior = Goal.EnvironmentBehavior.LOCAL_ONLY
+
+
+@goal_rule
+async def pyrefly_init(
+    init_subsystem: PyreflyInitSubsystem,
+    pyrefly: Pyrefly,
+    workspace: Workspace,
+    platform: Platform,
+) -> PyreflyInit:
+    if (
+        init_subsystem.migrate_from is not None
+        and init_subsystem.migrate_from not in _MIGRATE_FROM_CHOICES
+    ):
+        logger.error(
+            f"`--pyrefly-init-migrate-from` must be one of {', '.join(_MIGRATE_FROM_CHOICES)}; "
+            f"got `{init_subsystem.migrate_from}`."
+        )
+        return PyreflyInit(exit_code=1)
+
+    # `pyrefly init` reads any existing type-checker config from the working directory; materialize
+    # the candidates into the sandbox (no source files are needed — init does not type-check).
+    downloaded_pyrefly, config_digest = await concurrently(
+        download_external_tool(pyrefly.get_request(platform)),
+        path_globs_to_digest(
+            PathGlobs(
+                ["pyproject.toml", "mypy.ini", "setup.cfg", "pyrefly.toml"],
+                glob_match_error_behavior=GlobMatchErrorBehavior.ignore,
+            )
+        ),
+    )
+    input_files = {fc.path: fc.content for fc in await get_digest_contents(config_digest)}
+
+    # `pyrefly init` refuses to overwrite an existing config; surface that as a clear message
+    # rather than a bare nonzero exit. The `b"[tool.pyrefly"` sentinel matches `config_request()`.
+    already_configured = "pyrefly.toml" in input_files or (
+        b"[tool.pyrefly" in input_files.get("pyproject.toml", b"")
+    )
+    if already_configured:
+        logger.error(
+            softwrap(
+                """
+                A Pyrefly config already exists (`pyrefly.toml`, or `[tool.pyrefly]` in
+                `pyproject.toml`). Remove it and re-run `pants pyrefly-init` to regenerate.
+                """
+            )
+        )
+        return PyreflyInit(exit_code=1)
+
+    tool_key = "__pyrefly_tool"
+    exe_path = os.path.normpath(os.path.join(tool_key, downloaded_pyrefly.exe))
+    argv = [exe_path, "init", "--non-interactive"]
+    if init_subsystem.migrate_from is not None:
+        argv += ["--migrate-from", init_subsystem.migrate_from]
+    argv.append(".")
+
+    result = await execute_process(
+        Process(
+            argv=tuple(argv),
+            input_digest=config_digest,
+            immutable_input_digests={tool_key: downloaded_pyrefly.digest},
+            # Capture both possible targets; a nonexistent output file is simply omitted, so this
+            # grabs whichever file `init` writes without us needing to predict it.
+            output_files=("pyrefly.toml", "pyproject.toml"),
+            description="Bootstrap a Pyrefly config (`pyrefly init`).",
+            level=LogLevel.DEBUG,
+            cache_scope=ProcessCacheScope.PER_SESSION,
+        ),
+        **implicitly(),
+    )
+    if result.exit_code != 0:
+        logger.error(
+            f"`pyrefly init` failed (exit {result.exit_code}):\n"
+            f"{result.stderr.decode(errors='replace')}"
+        )
+        return PyreflyInit(exit_code=result.exit_code)
+
+    # Write back only the files `init` actually created or changed (it also captures an untouched
+    # pyproject.toml as a maybe-target — don't rewrite it needlessly).
+    changed = [
+        fc
+        for fc in await get_digest_contents(result.output_digest)
+        if input_files.get(fc.path) != fc.content
+    ]
+    if not changed:
+        logger.warning("`pyrefly init` produced no config changes.")
+        return PyreflyInit(exit_code=0)
+
+    output_digest = await create_digest(CreateDigest(changed))
+    workspace.write_digest(output_digest)
+    logger.info(f"Wrote Pyrefly config: {', '.join(sorted(fc.path for fc in changed))}.")
+    return PyreflyInit(exit_code=0)
 
 
 def rules() -> Iterable[Rule | UnionRule]:
