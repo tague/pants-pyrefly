@@ -133,6 +133,21 @@ pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::   # also fails if bel
   Pyrefly's `--python-interpreter-path` at it, so Pyrefly discovers `site-packages` and the target
   Python version exactly as `import` would at runtime.
 
+## Diagnostics
+
+When Pyrefly resolves imports or the interpreter differently than you expect, dump the effective
+configuration Pants assembles — the first-party `search-path`s, the interpreter used for third-party
+resolution, and the config file in effect:
+
+```bash
+pants pyrefly-dump-config ::                    # whole repo
+pants pyrefly-dump-config src/project::         # a subtree
+```
+
+This runs Pyrefly's `dump-config` subcommand with exactly the arguments Pants passes to `check`, so
+what you see is what `pants check` sees. It does not type-check. When targets span multiple resolves
+or interpreter constraints, each partition's config is printed under its own heading.
+
 ## Pants compatibility
 
 | Plugin version | Pants | Pyrefly (default) |

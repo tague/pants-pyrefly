@@ -10,6 +10,7 @@ import pytest  # pants: no-infer-dep
 
 from pants_pyrefly.goals import (
     PyreflyCoverage,
+    PyreflyDumpConfig,
     PyreflyLspConfig,
     PyreflySuppress,
     PyreflyUpdateBaseline,
@@ -320,6 +321,21 @@ def test_coverage_goal(rule_runner: PythonRuleRunner) -> None:
         env_inherit=_ENV_INHERIT,
     )
     assert gated.exit_code == 1
+
+
+def test_dump_config_goal(rule_runner: PythonRuleRunner) -> None:
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x: int = 1\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    reported = rule_runner.run_goal_rule(
+        PyreflyDumpConfig, args=["src/project::"], env_inherit=_ENV_INHERIT
+    )
+    assert reported.exit_code == 0
+    # `dump-config` prints the resolved interpreter and import-resolution search paths.
+    assert "interpreter" in reported.stdout.lower()
 
 
 def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> None:

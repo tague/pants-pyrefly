@@ -406,5 +406,79 @@ async def pyrefly_suppress(
     return PyreflySuppress(exit_code=0)
 
 
+# ---
+# `pyrefly-dump-config`
+# ---
+
+
+class PyreflyDumpConfigSubsystem(GoalSubsystem):
+    name = "pyrefly-dump-config"
+    help = softwrap(
+        """
+        Print the effective Pyrefly configuration Pants assembles for the targeted sources — the
+        first-party `search-path`s, the interpreter Pyrefly resolves third-party imports from, and
+        the config file in effect — by running Pyrefly's `dump-config` subcommand. Diagnostic only;
+        it does not type-check. Use it to debug import or interpreter resolution.
+        """
+    )
+
+
+class PyreflyDumpConfig(Goal):
+    subsystem_cls = PyreflyDumpConfigSubsystem
+    environment_behavior = Goal.EnvironmentBehavior.LOCAL_ONLY
+
+
+@goal_rule
+async def pyrefly_dump_config(
+    targets: Targets,
+    pyrefly: Pyrefly,
+    console: Console,
+    platform: Platform,
+    python_setup: PythonSetup,
+) -> PyreflyDumpConfig:
+    field_sets = tuple(
+        PyreflyFieldSet.create(tgt)
+        for tgt in targets
+        if PyreflyFieldSet.is_applicable(tgt) and not PyreflyFieldSet.opt_out(tgt)
+    )
+    if not field_sets:
+        logger.warning("No Pyrefly-applicable targets in scope.")
+        return PyreflyDumpConfig(exit_code=0)
+
+    partitions = list(
+        await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
+    )
+    processes = await concurrently(
+        _setup_pyrefly_process(
+            partition,
+            pyrefly,
+            platform,
+            python_setup,
+            # `dump-config` reports the config it would apply to the given files, mirroring what
+            # `check` sees; the argfile of files is passed just as it is for `check`.
+            subcommand=("dump-config",),
+            cache_scope=ProcessCacheScope.PER_SESSION,
+        )
+        for partition in partitions
+    )
+    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+
+    label_partitions = len(partitions) > 1
+    exit_code = 0
+    for partition, result in zip(partitions, results):
+        if result.exit_code != 0:
+            # `dump-config` is expected to exit 0; a nonzero code is a Pyrefly tool failure.
+            logger.error(
+                f"Pyrefly `dump-config` failed (exit {result.exit_code}) on partition "
+                f"({partition.description()}):\n{result.stderr.decode(errors='replace')}"
+            )
+            exit_code = result.exit_code
+            continue
+        if label_partitions:
+            console.print_stdout(f"# {partition.description()}")
+        console.print_stdout(result.stdout.decode(errors="replace").rstrip())
+    return PyreflyDumpConfig(exit_code=exit_code)
+
+
 def rules() -> Iterable[Rule | UnionRule]:
     return (*collect_rules(),)
