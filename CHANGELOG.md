@@ -5,6 +5,9 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 
 ## 0.3.0 (unreleased)
 
+- `pants pyrefly-init` bootstraps a Pyrefly config for the repo (wraps `pyrefly init`), migrating an
+  existing MyPy or Pyright configuration when one is found. `--pyrefly-init-migrate-from=<auto|mypy|pyright>`
+  selects the source. It refuses to overwrite an existing config.
 - `pants pyrefly-dump-config` prints the effective Pyrefly configuration Pants assembles for the
   targeted sources (first-party `search-path`s, the resolved interpreter, and the config file in
   effect) by running Pyrefly's `dump-config` subcommand. Diagnostic only — it does not type-check.

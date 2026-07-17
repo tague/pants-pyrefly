@@ -11,6 +11,7 @@ import pytest  # pants: no-infer-dep
 from pants_pyrefly.goals import (
     PyreflyCoverage,
     PyreflyDumpConfig,
+    PyreflyInit,
     PyreflyLspConfig,
     PyreflySuppress,
     PyreflyUpdateBaseline,
@@ -281,6 +282,29 @@ def test_update_baseline_roundtrip(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
     gated = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-baseline=pyrefly-baseline.json"])
     assert gated[0].exit_code == 0
+
+
+def test_init_creates_config(rule_runner: PythonRuleRunner) -> None:
+    # A repo with a MyPy config and no Pyrefly config: `pyrefly-init` migrates it into pyrefly.toml.
+    rule_runner.write_files({"mypy.ini": "[mypy]\nstrict = True\npython_version = 3.11\n"})
+    result = rule_runner.run_goal_rule(
+        PyreflyInit, args=["--pyrefly-init-migrate-from=mypy"], env_inherit=_ENV_INHERIT
+    )
+    assert result.exit_code == 0
+    config_path = os.path.join(rule_runner.build_root, "pyrefly.toml")
+    assert os.path.exists(config_path)
+    with open(config_path) as fh:
+        assert fh.read().strip()  # non-empty config was written
+
+
+def test_init_refuses_existing_config(rule_runner: PythonRuleRunner) -> None:
+    original = 'preset = "legacy"\n# hand-tuned\n'
+    rule_runner.write_files({"pyrefly.toml": original})
+    result = rule_runner.run_goal_rule(PyreflyInit, env_inherit=_ENV_INHERIT)
+    assert result.exit_code == 1
+    # The existing config must be left untouched.
+    with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
+        assert fh.read() == original
 
 
 def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:

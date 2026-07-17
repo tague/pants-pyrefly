@@ -27,14 +27,15 @@ pants --only=mypy    check ::     # just MyPy
 
 ## 2. Convert your MyPy config
 
-Pyrefly can import an existing MyPy (or Pyright) configuration:
+Pyrefly can import an existing MyPy (or Pyright) configuration. Run it through Pants so the plugin
+manages the Pyrefly binary for you:
 
 ```bash
-pyrefly init --migrate-from mypy
+pants pyrefly-init --pyrefly-init-migrate-from=mypy
 ```
 
-This generates a `pyrefly.toml` (or a `pyproject.toml [tool.pyrefly]` table) from your `[mypy]` /
-`mypy.ini` settings. Review the result — not everything maps 1:1:
+This generates a `pyrefly.toml` from your `[mypy]` / `mypy.ini` settings. Review the result — not
+everything maps 1:1:
 
 - `ignore_missing_imports`, per-module overrides, and strictness flags migrate.
 - **MyPy *plugins* do not** — Pyrefly has no plugin system (see the gap note below).
