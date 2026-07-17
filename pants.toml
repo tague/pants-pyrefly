@@ -35,4 +35,5 @@ indexes = [
 root_patterns = [
     "/pants-plugins",
     "/testprojects/src",
+    "/build-support/bin",
 ]

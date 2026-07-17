@@ -186,6 +186,20 @@ pants test ::                     # run the integration tests
 pants package pants-plugins/pants_pyrefly:dist   # build the wheel + sdist into dist/
 ```
 
+### Bumping the pinned Pyrefly version
+
+The four `default_known_versions` pins in `subsystems.py` (`<version>|<platform>|<sha256>|<size>`)
+are generated, not hand-edited. To move to a new Pyrefly release:
+
+```bash
+python3 build-support/bin/generate_known_versions.py --version <new> --write
+```
+
+It reads the URL template and platform mapping straight from `subsystems.py`, fetches each asset's
+published `.sha256` sidecar and size from the GitHub release, and rewrites `default_version` + the
+pins. CI runs the same script with `--check` and fails if the committed pins drift from what the
+release actually publishes. (Set `GITHUB_TOKEN` to avoid GitHub API rate limits.)
+
 ## Releasing
 
 Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) builds the wheel and
