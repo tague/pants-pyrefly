@@ -3,6 +3,12 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.3.0 (unreleased)
+
+- `pants pyrefly-dump-config` prints the effective Pyrefly configuration Pants assembles for the
+  targeted sources (first-party `search-path`s, the resolved interpreter, and the config file in
+  effect) by running Pyrefly's `dump-config` subcommand. Diagnostic only — it does not type-check.
+
 ## 0.2.0 (2026-07-10)
 
 - `pants pyrefly-suppress` inserts inline `# pyrefly: ignore` comments for the current errors in the
