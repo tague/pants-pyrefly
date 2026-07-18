@@ -21,7 +21,7 @@ Add the plugin and enable its backend in `pants.toml`:
 
 ```toml
 [GLOBAL]
-plugins = ["pants-pyrefly==0.2.0"]
+plugins = ["pants-pyrefly==0.3.0"]
 backend_packages.add = [
     "pants.backend.python",
     "pants_pyrefly",
@@ -166,6 +166,7 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 | Plugin version | Pants | Pyrefly (default) |
 | --- | --- | --- |
+| `0.3.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.2.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.1.0` | `2.27`–`2.32` | `1.1.1` |
 

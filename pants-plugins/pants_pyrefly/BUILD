@@ -24,7 +24,7 @@ python_distribution(
     interpreter_constraints=["==3.14.*"],
     provides=python_artifact(
         name="pants-pyrefly",
-        version="0.2.0",
+        version="0.3.0",
         description="A Pants plugin that runs the Pyrefly type checker in the `check` goal.",
         long_description_content_type="text/markdown",
         license="Apache-2.0",

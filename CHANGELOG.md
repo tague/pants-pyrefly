@@ -3,7 +3,7 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-07-18)
 
 - `pants pyrefly-init` bootstraps a Pyrefly config for the repo (wraps `pyrefly init`), migrating an
   existing MyPy or Pyright configuration when one is found. `--pyrefly-init-migrate-from=<auto|mypy|pyright>`
