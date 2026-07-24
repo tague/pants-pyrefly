@@ -88,6 +88,22 @@ class Pyrefly(TemplatedExternalTool):
         ),
     )
 
+    exclude_source_roots = StrListOption(
+        advanced=True,
+        default=[],
+        help=help_text(
+            """
+            Pants source roots to omit from the `--search-path` Pyrefly resolves first-party
+            imports against.
+
+            The plugin already drops a source root that is redundant with a more specific one
+            (e.g. `src` when `src/python` already covers every module beneath it), so you rarely
+            need this. Use it to force-drop a root the automatic logic keeps — for example when
+            first-party code lives directly under a parent root that also shadows a nested one.
+            """
+        ),
+    )
+
     extra_type_stubs = StrListOption(
         advanced=True,
         default=[],

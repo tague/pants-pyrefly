@@ -141,6 +141,70 @@ async def pyrefly_determine_partitions(
 _BASELINE_OUTPUT = "__pyrefly_baseline_out.json"
 
 
+def _root_covers(root: str, dir_path: str) -> bool:
+    """Whether `root` is `dir_path` or an ancestor of it, matching on path-segment boundaries."""
+    if root in (".", ""):
+        return True
+    return dir_path == root or dir_path.startswith(root + "/")
+
+
+def _dedupe_search_path_roots(
+    source_roots: Iterable[str],
+    source_files: Iterable[str],
+    exclude: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Reduce Pants' source roots to the minimal set to hand Pyrefly as `--search-path`.
+
+    Pants aggregates one source root per *target* (its BUILD-file directory), so a repo whose
+    `[source] root_patterns` nests roots — e.g. both `src` and `src/python` — can surface an
+    ancestor root (`src`) alongside a descendant (`src/python`). Emitting both makes every module
+    under `src/python` reachable twice — as `pkg.mod` via `src/python` and as `python.pkg.mod` via
+    `src` — which Pyrefly treats as two distinct types, producing spurious "not assignable to
+    itself" errors.
+
+    Mirror Pants' own one-root-per-file model: keep only the roots that are the nearest
+    (longest-matching) root of an actual source file. An ancestor root that no file resolves to is
+    dropped; one that a file genuinely needs is kept. If a kept root still shadows a nested kept
+    root (a real layout collision — first-party code lives directly under the ancestor as well as
+    under the descendant), warn rather than silently hide code; `[pyrefly].exclude_source_roots`
+    can force-drop a root in that case.
+    """
+    excluded = set(exclude)
+    candidates = sorted({root for root in source_roots if root not in excluded})
+
+    needed: set[str] = set()
+    for source_file in source_files:
+        dir_path = os.path.dirname(source_file)
+        nearest: str | None = None
+        for root in candidates:
+            if _root_covers(root, dir_path) and (nearest is None or len(root) > len(nearest)):
+                nearest = root
+        if nearest is not None:
+            needed.add(nearest)
+
+    emitted = sorted(needed)
+
+    # Surface any remaining ancestor/descendant shadowing (a genuine layout collision we cannot
+    # resolve without hiding code).
+    for root in emitted:
+        shadowed = [other for other in emitted if other != root and _root_covers(root, other)]
+        if shadowed:
+            logger.warning(
+                softwrap(
+                    f"""
+                    Pyrefly source root `{root}` is an ancestor of
+                    {", ".join(f"`{s}`" for s in shadowed)}; modules under the nested root(s) are
+                    importable under two names and may produce spurious duplicate-module errors.
+                    This happens when first-party code lives directly under `{root}` as well as
+                    under a nested source root. Consolidate the layout, or drop a root with
+                    `[pyrefly].exclude_source_roots`.
+                    """
+                )
+            )
+
+    return tuple(emitted)
+
+
 async def _setup_pyrefly_process(
     partition: PyreflyPartition,
     pyrefly: Pyrefly,
@@ -276,8 +340,16 @@ async def _setup_pyrefly_process(
     )
 
     argv: list[str] = [exe_path, *subcommand]
-    # First-party import roots (the analogue of MYPYPATH / sys.path).
-    argv.extend(f"--search-path={source_root}" for source_root in transitive_sources.source_roots)
+    # First-party import roots (the analogue of MYPYPATH / sys.path). Dedupe nested roots so a
+    # module reachable under both `src` and `src/python` is not assigned two identities.
+    argv.extend(
+        f"--search-path={source_root}"
+        for source_root in _dedupe_search_path_roots(
+            transitive_sources.source_roots,
+            transitive_sources.source_files.snapshot.files,
+            pyrefly.exclude_source_roots,
+        )
+    )
     # Third-party deps + interpreter introspection.
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:

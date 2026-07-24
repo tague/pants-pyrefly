@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import pytest  # pants: no-infer-dep
+import toml  # pants: no-infer-dep
 
 from pants_pyrefly.goals import (
     PyreflyCoverage,
@@ -17,7 +19,11 @@ from pants_pyrefly.goals import (
     PyreflyUpdateBaseline,
 )
 from pants_pyrefly.register import rules as pyrefly_register_rules
-from pants_pyrefly.rules import PyreflyFieldSet, PyreflyRequest
+from pants_pyrefly.rules import (
+    PyreflyFieldSet,
+    PyreflyRequest,
+    _dedupe_search_path_roots,
+)
 
 from pants.backend.python import target_types_rules
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
@@ -71,6 +77,71 @@ def run_pyrefly(
     field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
     checks = rule_runner.request(CheckResults, [PyreflyRequest(field_sets)])
     return checks.results
+
+
+# ---
+# Unit tests for `_dedupe_search_path_roots` (pure, no rule runner needed).
+# ---
+
+
+def test_dedupe_drops_redundant_ancestor_root() -> None:
+    # `src` is an ancestor of `src/python` and no file resolves to it directly, so it is dropped.
+    result = _dedupe_search_path_roots(
+        source_roots=("src", "src/python"),
+        source_files=("src/python/pkg/mod.py", "src/python/pkg/other.py"),
+    )
+    assert result == ("src/python",)
+
+
+def test_dedupe_keeps_ancestor_a_file_needs_and_warns(caplog: pytest.LogCaptureFixture) -> None:
+    # A file lives directly under `src` (nothing more specific covers it), so `src` must stay —
+    # but it still shadows `src/python`, which we surface as a warning rather than hide code.
+    with caplog.at_level(logging.WARNING):
+        result = _dedupe_search_path_roots(
+            source_roots=("src", "src/python"),
+            source_files=("src/extra.py", "src/python/pkg/mod.py"),
+        )
+    assert result == ("src", "src/python")
+    assert any("is an ancestor of" in record.message for record in caplog.records)
+
+
+def test_dedupe_exclude_forces_a_root_out() -> None:
+    # `exclude` drops `src` even though a file resolves to it (the user's explicit choice); the
+    # `src/extra.py` file is simply left without a covering root.
+    result = _dedupe_search_path_roots(
+        source_roots=("src", "src/python"),
+        source_files=("src/extra.py", "src/python/pkg/mod.py"),
+        exclude=("src",),
+    )
+    assert result == ("src/python",)
+
+
+def test_dedupe_keeps_sibling_roots() -> None:
+    # Neither root is an ancestor of the other, so both are kept and there is no warning.
+    result = _dedupe_search_path_roots(
+        source_roots=("src/python", "test/python"),
+        source_files=("src/python/a.py", "test/python/b.py"),
+    )
+    assert result == ("src/python", "test/python")
+
+
+def test_dedupe_drops_buildroot_when_covered() -> None:
+    # The build-root source root (".") is an ancestor of everything; drop it when a more specific
+    # root already covers every file.
+    result = _dedupe_search_path_roots(
+        source_roots=(".", "src/python"),
+        source_files=("src/python/pkg/mod.py",),
+    )
+    assert result == ("src/python",)
+
+
+def test_dedupe_prefix_lookalike_is_not_an_ancestor() -> None:
+    # `src` must not be treated as an ancestor of `srcfoo` (segment-aware matching).
+    result = _dedupe_search_path_roots(
+        source_roots=("src", "srcfoo"),
+        source_files=("src/a.py", "srcfoo/b.py"),
+    )
+    assert result == ("src", "srcfoo")
 
 
 def test_passing(rule_runner: PythonRuleRunner) -> None:
@@ -322,6 +393,56 @@ def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
         content = fh.read()
     assert "search-path" in content
     assert "python-version" in content
+
+
+def test_lsp_config_dedupes_nested_source_roots(rule_runner: PythonRuleRunner) -> None:
+    # With both `src` and `src/python` as source roots, a target whose BUILD lives at `src` but
+    # whose files live under `src/python` makes Pants surface BOTH roots. Since no file actually
+    # resolves to bare `src`, the written search-path must contain `src/python` but not `src`
+    # (otherwise every module under `src/python` would be reachable under two names).
+    rule_runner.write_files(
+        {
+            "src/python/pkg/mod.py": "x = 1\n",
+            "src/python/pkg/BUILD": "python_sources()",
+            "src/python/extra/thing.py": "y = 1\n",
+            # BUILD at `src` (source root `src`) globbing a file that lives under `src/python`.
+            "src/BUILD": "python_sources(sources=['python/extra/thing.py'])",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyLspConfig,
+        global_args=['--source-root-patterns=["/src", "/src/python"]'],
+        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
+        roots = toml.loads(fh.read())["search-path"]
+    assert "src/python" in roots
+    assert "src" not in roots
+
+
+def test_lsp_config_exclude_source_roots(rule_runner: PythonRuleRunner) -> None:
+    # Here a file genuinely lives directly under `src`, so auto-dedup keeps `src`;
+    # `[pyrefly].exclude_source_roots` force-drops it anyway.
+    rule_runner.write_files(
+        {
+            "src/toplevel.py": "a = 1\n",
+            "src/BUILD": "python_sources()",
+            "src/python/pkg/mod.py": "b = 1\n",
+            "src/python/pkg/BUILD": "python_sources()",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyLspConfig,
+        global_args=['--source-root-patterns=["/src", "/src/python"]'],
+        args=["--pyrefly-exclude-source-roots=['src']"],
+        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
+        roots = toml.loads(fh.read())["search-path"]
+    assert "src/python" in roots
+    assert "src" not in roots
 
 
 def test_coverage_goal(rule_runner: PythonRuleRunner) -> None:

@@ -14,6 +14,7 @@ from pants_pyrefly.rules import (
     _BASELINE_OUTPUT,
     PyreflyFieldSet,
     PyreflyRequest,
+    _dedupe_search_path_roots,
     _setup_pyrefly_process,
     pyrefly_determine_partitions,
 )
@@ -167,6 +168,7 @@ class PyreflyLspConfig(Goal):
 @goal_rule
 async def pyrefly_lsp_config(
     all_targets: AllTargets,
+    pyrefly: Pyrefly,
     python_setup: PythonSetup,
     workspace: Workspace,
 ) -> PyreflyLspConfig:
@@ -180,7 +182,14 @@ async def pyrefly_lsp_config(
         python_setup.interpreter_constraints
     ).minimum_python_version(python_setup.interpreter_versions_universe)
 
-    settings: dict = {"search-path": sorted(sources.source_roots)}
+    # Match `check`'s search path: dedupe nested source roots so the LSP resolves imports the same
+    # way and doesn't see modules under two names.
+    search_path = _dedupe_search_path_roots(
+        sources.source_roots,
+        sources.source_files.snapshot.files,
+        pyrefly.exclude_source_roots,
+    )
+    settings: dict = {"search-path": list(search_path)}
     if python_version:
         settings["python-version"] = python_version
 

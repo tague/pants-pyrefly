@@ -78,6 +78,7 @@ pants check path/to/dir::      # type-check a subtree
 | `config` | `--pyrefly-config` | Path to a `pyrefly.toml` / `pyproject.toml` (disables discovery). |
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
 | `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |
+| `exclude_source_roots` | `--pyrefly-exclude-source-roots` (advanced) | Source roots to omit from `--search-path`. Rarely needed — nested roots are deduped automatically (see below); use this only to force-drop a root the automatic logic keeps. |
 | `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. |
 
 Opt a target out of Pyrefly:
@@ -141,8 +142,13 @@ pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::   # also fails if bel
 
 ## How import resolution works
 
-- **First-party code:** every source root is passed to Pyrefly via `--search-path` (the analogue of
-  `MYPYPATH` / `sys.path`).
+- **First-party code:** your source roots are passed to Pyrefly via `--search-path` (the analogue of
+  `MYPYPATH` / `sys.path`). When source roots nest — e.g. `[source] root_patterns` lists both `src`
+  and `src/python` — the plugin emits only each file's *nearest* root, dropping a redundant ancestor.
+  Otherwise a module under `src/python` would be reachable under two names (`pkg.mod` and
+  `python.pkg.mod`), which Pyrefly flags as spurious duplicate-module errors. If first-party code
+  genuinely lives directly under both an ancestor and a nested root, the plugin keeps both and warns;
+  use `[pyrefly].exclude_source_roots` to force-drop one.
 - **Third-party deps:** Pants materializes the target's resolved requirements into a venv and points
   Pyrefly's `--python-interpreter-path` at it, so Pyrefly discovers `site-packages` and the target
   Python version exactly as `import` would at runtime.
