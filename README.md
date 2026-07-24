@@ -172,6 +172,7 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 | Plugin version | Pants | Pyrefly (default) |
 | --- | --- | --- |
+| `0.4.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.3.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.2.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.1.0` | `2.27`–`2.32` | `1.1.1` |

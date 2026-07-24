@@ -3,7 +3,7 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.4.0 (2026-07-24)
 
 - Nested/overlapping Pants source roots are now deduplicated before being passed to Pyrefly as
   `--search-path` (applies to `check`, the goals, and `pants pyrefly-lsp-config`). Previously, a repo
