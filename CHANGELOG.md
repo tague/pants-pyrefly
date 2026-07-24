@@ -3,6 +3,18 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Nested/overlapping Pants source roots are now deduplicated before being passed to Pyrefly as
+  `--search-path` (applies to `check`, the goals, and `pants pyrefly-lsp-config`). Previously, a repo
+  with both `src` and `src/python` in `[source] root_patterns` made every module under the nested
+  root reachable under two names (`pkg.mod` and `python.pkg.mod`), which Pyrefly reported as spurious
+  duplicate-module / "not assignable to itself" errors. The plugin now emits only each file's nearest
+  source root; a redundant ancestor root is dropped, and a genuine layout collision (first-party code
+  living directly under both an ancestor and a nested root) is surfaced as a warning.
+- New advanced option `[pyrefly].exclude_source_roots` to force-drop specific source roots from the
+  search path, for the rare case the automatic dedup should keep one but you don't want it.
+
 ## 0.3.0 (2026-07-18)
 
 - `pants pyrefly-init` bootstraps a Pyrefly config for the repo (wraps `pyrefly init`), migrating an
