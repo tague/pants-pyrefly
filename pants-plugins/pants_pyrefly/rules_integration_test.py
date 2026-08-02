@@ -23,6 +23,10 @@ from pants_pyrefly.rules import (
     PyreflyFieldSet,
     PyreflyRequest,
     _dedupe_search_path_roots,
+    _plan_restage,
+    _real_prefix,
+    _remap_path,
+    _remap_text,
 )
 
 from pants.backend.python import target_types_rules
@@ -39,6 +43,7 @@ from pants.engine.addresses import Address
 from pants.engine.rules import QueryRule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
+from pants.util.frozendict import FrozenDict
 
 # Inherited so Pants can discover system interpreters and download the Pyrefly binary.
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
@@ -142,6 +147,41 @@ def test_dedupe_prefix_lookalike_is_not_an_ancestor() -> None:
         source_files=("src/a.py", "srcfoo/b.py"),
     )
     assert result == ("src", "srcfoo")
+
+
+# ---
+# Unit tests for the re-staging planner + path remap (pure, no rule runner needed).
+# ---
+
+
+def test_plan_restage_one_nonnesting_root_per_file() -> None:
+    # Each file lands under exactly one synthetic sibling dir; the build root ("." ) keeps the full
+    # path (module `scripts.x`), a nested root has its prefix stripped (module `pkg.m`).
+    root_of = {"src/python/pkg/m.py": "src/python", "scripts/x.py": "."}
+    root_to_synth, real_to_synth, search_paths = _plan_restage(list(root_of), root_of)
+    assert not any(a != b and b.startswith(a + "/") for a in search_paths for b in search_paths)
+    assert real_to_synth["scripts/x.py"] == f"{root_to_synth['.']}/scripts/x.py"
+    assert real_to_synth["src/python/pkg/m.py"] == f"{root_to_synth['src/python']}/pkg/m.py"
+
+
+def test_plan_restage_deterministic_and_collision_free() -> None:
+    # Mirrored relpaths under two roots must not collide, and naming is a deterministic sort index.
+    root_of = {"src/python/config/s.py": "src/python", "test/python/config/s.py": "test/python"}
+    root_to_synth, real_to_synth, _ = _plan_restage(list(root_of), root_of)
+    assert len(set(real_to_synth.values())) == 2
+    assert root_to_synth == {"src/python": "__pyrefly_root_0", "test/python": "__pyrefly_root_1"}
+
+
+def test_remap_roundtrips_synthetic_paths_back_to_real() -> None:
+    m = FrozenDict({"__pyrefly_root_0": ".", "__pyrefly_root_1": "src/python"})
+    assert _real_prefix(".") == ""
+    assert _real_prefix("src/python") == "src/python/"
+    assert _remap_path("__pyrefly_root_1/pkg/m.py", m) == "src/python/pkg/m.py"
+    assert (
+        _remap_path("__pyrefly_root_0/scripts/x.py", m) == "scripts/x.py"
+    )  # build root: no prefix
+    assert _remap_path("outside/p.py", m) == "outside/p.py"  # unmatched left as-is
+    assert _remap_text("--> __pyrefly_root_1/pkg/m.py:5:1", m) == "--> src/python/pkg/m.py:5:1"
 
 
 def test_passing(rule_runner: PythonRuleRunner) -> None:

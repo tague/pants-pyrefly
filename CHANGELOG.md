@@ -3,6 +3,22 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.5.0 (2026-08-02)
+
+- Nested source roots no longer produce spurious duplicate-module errors, even when the ancestor
+  root is one that a file genuinely roots at (e.g. the build root `.` when a top-level `scripts/`
+  or `tools/` package lives there). `check` now re-stages each source root's files into an isolated,
+  non-nesting synthetic directory before invoking Pyrefly and passes `--disable-search-path-heuristics`,
+  so every file is reachable under exactly one module identity regardless of how `[source] root_patterns`
+  nest or how the dependency graph is shaped. This generalizes the 0.4.0 nearest-root dedup, which
+  could only drop an ancestor root that *no* file needed — it could not fix a repo where first-party
+  code roots at both an ancestor and a descendant (the common `.`-plus-`src/python` layout), leaving
+  those errors to a baseline. Pyrefly's synthetic output paths are mapped back to real repo paths in
+  diagnostics, the `pants pyrefly-update-baseline` file, and `pants pyrefly-suppress` edits.
+- `pants pyrefly-update-baseline` and `pants pyrefly-suppress` re-stage the same way, so a regenerated
+  baseline no longer records the spurious errors and `suppress` no longer inserts `# pyrefly: ignore`
+  comments for them.
+
 ## 0.4.0 (2026-07-24)
 
 - Nested/overlapping Pants source roots are now deduplicated before being passed to Pyrefly as

@@ -9,23 +9,14 @@ import os
 from collections.abc import Iterable
 
 import toml  # pants: no-infer-dep  (provided by the Pants runtime)
-
-from pants_pyrefly.rules import (
-    _BASELINE_OUTPUT,
-    PyreflyFieldSet,
-    PyreflyRequest,
-    _dedupe_search_path_roots,
-    _setup_pyrefly_process,
-    pyrefly_determine_partitions,
-)
-from pants_pyrefly.subsystems import Pyrefly
-
 from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.util_rules.interpreter_constraints import InterpreterConstraints
 from pants.backend.python.util_rules.python_sources import (
     PythonSourceFilesRequest,
     prepare_python_sources,
 )
+from pants.core.util_rules.external_tool import download_external_tool
+from pants.engine.console import Console
 from pants.engine.fs import (
     EMPTY_DIGEST,
     CreateDigest,
@@ -35,7 +26,6 @@ from pants.engine.fs import (
     PathGlobs,
     Workspace,
 )
-from pants.engine.console import Console
 from pants.engine.goal import Goal, GoalSubsystem
 from pants.engine.intrinsics import (
     create_digest,
@@ -44,7 +34,6 @@ from pants.engine.intrinsics import (
     merge_digests,
     path_globs_to_digest,
 )
-from pants.core.util_rules.external_tool import download_external_tool
 from pants.engine.platform import Platform
 from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Rule, collect_rules, concurrently, goal_rule, implicitly
@@ -53,6 +42,18 @@ from pants.engine.unions import UnionRule
 from pants.option.option_types import BoolOption, FloatOption, StrOption
 from pants.util.logging import LogLevel
 from pants.util.strutil import softwrap
+
+from pants_pyrefly.rules import (
+    _BASELINE_OUTPUT,
+    PyreflyFieldSet,
+    PyreflyRequest,
+    _dedupe_search_path_roots,
+    _remap_path,
+    _setup_pyrefly_process,
+    _unstage_digest,
+    pyrefly_determine_partitions,
+)
+from pants_pyrefly.subsystems import Pyrefly
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ async def pyrefly_update_baseline(
         return PyreflyUpdateBaseline(exit_code=0)
 
     partitions = await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
-    processes = await concurrently(
+    invocations = await concurrently(
         _setup_pyrefly_process(
             partition,
             pyrefly,
@@ -117,7 +118,9 @@ async def pyrefly_update_baseline(
         )
         for partition in partitions
     )
-    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+    results = await concurrently(
+        execute_process(inv.process, **implicitly()) for inv in invocations
+    )
 
     for result in results:
         # 0 == no errors, 1 == errors found (both expected); anything else is a tool failure, and
@@ -130,12 +133,17 @@ async def pyrefly_update_baseline(
             )
             return PyreflyUpdateBaseline(exit_code=result.exit_code)
 
-    # Merge the per-partition baselines (each is `{"errors": [...]}`) into a single file.
+    # Merge the per-partition baselines (each is `{"errors": [...]}`) into a single file, mapping
+    # Pyrefly's synthetic re-staged paths back to real repo paths so the committed baseline stays
+    # human- and diff-friendly (and matches how errors are reported on a subsequent `check`).
     all_errors: list = []
-    for result in results:
+    for invocation, result in zip(invocations, results, strict=True):
         for file_content in await get_digest_contents(result.output_digest):
             if file_content.path == _BASELINE_OUTPUT and file_content.content.strip():
-                all_errors.extend(json.loads(file_content.content).get("errors", []))
+                for error in json.loads(file_content.content).get("errors", []):
+                    if isinstance(error, dict) and "path" in error:
+                        error["path"] = _remap_path(error["path"], invocation.synth_root_to_real)
+                    all_errors.append(error)
 
     merged = json.dumps({"errors": all_errors}, indent=2).encode()
     output_digest = await create_digest(CreateDigest([FileContent(pyrefly.baseline, merged)]))
@@ -209,7 +217,7 @@ async def pyrefly_lsp_config(
 
     # Don't create a `pyrefly.toml` that would shadow an existing `pyproject.toml [tool.pyrefly]`.
     if pyrefly_toml_digest == EMPTY_DIGEST and pyproject_has_pyrefly:
-        logger.warning(
+        message = (
             softwrap(
                 """
                 Your Pyrefly config lives in `pyproject.toml` under `[tool.pyrefly]`. A separate
@@ -219,6 +227,7 @@ async def pyrefly_lsp_config(
             )
             + f"\n\n{toml.dumps(settings).strip()}\n"
         )
+        logger.warning(message)
         return PyreflyLspConfig(exit_code=0)
 
     # Merge into an existing `pyrefly.toml` (preserving other keys) or create a new one.
@@ -283,7 +292,7 @@ async def pyrefly_coverage(
         return PyreflyCoverage(exit_code=0)
 
     partitions = await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
-    processes = await concurrently(
+    invocations = await concurrently(
         _setup_pyrefly_process(
             partition,
             pyrefly,
@@ -294,7 +303,9 @@ async def pyrefly_coverage(
         )
         for partition in partitions
     )
-    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+    results = await concurrently(
+        execute_process(inv.process, **implicitly()) for inv in invocations
+    )
 
     total_typable = 0
     total_typed = 0
@@ -382,7 +393,7 @@ async def pyrefly_suppress(
 
     partitions = await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
     subcommand_args = ("--remove-unused",) if suppress_subsystem.remove_unused else ()
-    processes = await concurrently(
+    invocations = await concurrently(
         _setup_pyrefly_process(
             partition,
             pyrefly,
@@ -395,7 +406,9 @@ async def pyrefly_suppress(
         )
         for partition in partitions
     )
-    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+    results = await concurrently(
+        execute_process(inv.process, **implicitly()) for inv in invocations
+    )
 
     for result in results:
         # 0 == nothing to do, 1 == errors were suppressed (both expected). Anything else is a tool
@@ -407,7 +420,13 @@ async def pyrefly_suppress(
             )
             return PyreflySuppress(exit_code=result.exit_code)
 
-    output_digest = await merge_digests(MergeDigests(result.output_digest for result in results))
+    # Pyrefly edited the re-staged copies; relocate each partition's edits from the synthetic
+    # `__pyrefly_root_<n>/…` paths back to their real repo paths before writing to the workspace.
+    restored = await concurrently(
+        _unstage_digest(result.output_digest, invocation.synth_root_to_real)
+        for invocation, result in zip(invocations, results, strict=True)
+    )
+    output_digest = await merge_digests(MergeDigests(restored))
     workspace.write_digest(output_digest)
     action = (
         "Removed unused Pyrefly suppressions"
@@ -585,7 +604,7 @@ async def pyrefly_dump_config(
     partitions = list(
         await pyrefly_determine_partitions(PyreflyRequest(field_sets), **implicitly())
     )
-    processes = await concurrently(
+    invocations = await concurrently(
         _setup_pyrefly_process(
             partition,
             pyrefly,
@@ -598,11 +617,13 @@ async def pyrefly_dump_config(
         )
         for partition in partitions
     )
-    results = await concurrently(execute_process(process, **implicitly()) for process in processes)
+    results = await concurrently(
+        execute_process(inv.process, **implicitly()) for inv in invocations
+    )
 
     label_partitions = len(partitions) > 1
     exit_code = 0
-    for partition, result in zip(partitions, results):
+    for partition, result in zip(partitions, results, strict=True):
         if result.exit_code != 0:
             # `dump-config` is expected to exit 0; a nonzero code is a Pyrefly tool failure.
             logger.error(
