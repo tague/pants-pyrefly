@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pants-version: ["2.27.0", "2.31.0", "2.32.0"]
+        pants-version: ["2.27.0", "2.31.0", "2.32.0", "2.33.0"]
     steps:
       - uses: actions/checkout@v5
 

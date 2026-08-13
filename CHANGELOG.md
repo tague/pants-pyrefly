@@ -3,6 +3,22 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 1.0.0 (2026-08-13)
+
+First stable release. No breaking changes from 0.5.0 — the goals, `[pyrefly]` options, and
+`skip_pyrefly` field all behave as they did; the bump declares the surface stable rather than
+changing it. See [Stability](README.md#stability) for what the compatibility promise now covers
+and what stays an implementation detail.
+
+- **Pants 2.33 is supported.** The consumption smoke-test matrix now covers 2.27, 2.31, 2.32, and
+  2.33, so the version-conditional rules-API shim is verified on the current Pants line.
+- **The default pinned Pyrefly is now 1.2.0** (was 1.1.1). Pin the old one with
+  `[pyrefly].version = "1.1.1"` if a new Pyrefly release changes what your build reports.
+- Documented how import resolution actually works as of 0.5.0: the README described only the 0.4.0
+  nearest-root dedup, which `check` and `pyrefly-suppress` no longer use — they re-stage each source
+  root into an isolated sibling directory instead. The diagnostic goals (`pyrefly-coverage`,
+  `pyrefly-dump-config`, `pyrefly-lsp-config`) still pass nearest-root-deduped real source roots.
+
 ## 0.5.0 (2026-08-02)
 
 - Nested source roots no longer produce spurious duplicate-module errors, even when the ancestor
