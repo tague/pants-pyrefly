@@ -452,7 +452,7 @@ async def _setup_pyrefly_process(
     is_check = subcommand == ("check",)
 
     # Re-stage sources so no source root nests inside another, eliminating the dual-module-identity
-    # false positives at whole-repo scope (MID-5506). Applied to the error-reporting subcommands
+    # false positives at whole-repo scope. Applied to the error-reporting subcommands
     # (`check`, including `--update-baseline`, and `suppress`); `coverage`/`dump-config` don't need
     # it. `synth_root_to_real` (empty when not re-staged) lets callers map synthetic output
     # paths back to real repo paths.

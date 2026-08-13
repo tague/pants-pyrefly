@@ -35,7 +35,7 @@ class Pyrefly(TemplatedExternalTool):
         """
     )
 
-    default_version = "1.1.1"
+    default_version = "1.2.0"
     default_url_template = (
         "https://github.com/facebook/pyrefly/releases/download/{version}/pyrefly-{platform}.tar.gz"
     )
@@ -48,10 +48,10 @@ class Pyrefly(TemplatedExternalTool):
         "linux_x86_64": "linux-x86_64-musl",
     }
     default_known_versions = [
-        "1.1.1|macos_arm64|022a989d2af4748e4d75a48fed7dbb0cc49f30a4b83745d4e4f742d0920ada70|12621775",
-        "1.1.1|macos_x86_64|191c7ee2891d2ab55a05b078c94832266e1dda78a9a0381a95fde13a2a27a38b|13278762",
-        "1.1.1|linux_arm64|f55454ac41ed1c086af1bd3cfbe2c2a25b960e46551df50ce047bc1ccb11fb35|13028969",
-        "1.1.1|linux_x86_64|fc591b4b283ceddb81116a8dd5c0e70d4f1a7dd291521c4debe0cd588c7fd74c|13660591",
+        "1.2.0|macos_arm64|312ab21e60fb4385a4cd5ef68bc70e2475d7b541a5cb5a30329db726b2b16e39|12988333",
+        "1.2.0|macos_x86_64|f1856386d167696af3fe05b5c2fbe807845e33da1024706cbe979c74ac7d7cdd|13661410",
+        "1.2.0|linux_arm64|5b27d702c8b8463090fe19ca4e2aa241bf8f2b09daf208feff051a90e4d12cee|13457814",
+        "1.2.0|linux_x86_64|18f509653a52fab1aab98d5b776486a4f278c04cc108fec8b52c131785f6d423|14080825",
     ]
 
     skip = SkipOption("check")

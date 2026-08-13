@@ -9,11 +9,11 @@ that imports resolve correctly.
 
 ## Requirements
 
-- **Pants 2.27–2.32.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
-  (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.32.
+- **Pants 2.27–2.33.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
+  (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.33.
 - The **published wheel** is pure-Python — `Requires-Python: >=3.11`, with **no `pantsbuild.pants`
   dependency** (Pants provides itself at runtime) — so a single release installs into any supported
-  Pants, from 2.27 (CPython 3.11) through 2.32 (CPython 3.14).
+  Pants, from 2.27 (CPython 3.11) through 2.33 (CPython 3.14).
 
 ## Installation
 
@@ -21,7 +21,7 @@ Add the plugin and enable its backend in `pants.toml`:
 
 ```toml
 [GLOBAL]
-plugins = ["pants-pyrefly==0.3.0"]
+plugins = ["pants-pyrefly==1.0.0"]
 backend_packages.add = [
     "pants.backend.python",
     "pants_pyrefly",
@@ -143,12 +143,23 @@ pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::   # also fails if bel
 ## How import resolution works
 
 - **First-party code:** your source roots are passed to Pyrefly via `--search-path` (the analogue of
-  `MYPYPATH` / `sys.path`). When source roots nest — e.g. `[source] root_patterns` lists both `src`
-  and `src/python` — the plugin emits only each file's *nearest* root, dropping a redundant ancestor.
-  Otherwise a module under `src/python` would be reachable under two names (`pkg.mod` and
-  `python.pkg.mod`), which Pyrefly flags as spurious duplicate-module errors. If first-party code
-  genuinely lives directly under both an ancestor and a nested root, the plugin keeps both and warns;
-  use `[pyrefly].exclude_source_roots` to force-drop one.
+  `MYPYPATH` / `sys.path`). Pants gives every file exactly one source root, but Pyrefly makes a file
+  importable under *every* search path that physically contains it — so when source roots nest (the
+  common case: the build root `.` above `src/python`), a file gets two module identities (`pkg.mod`
+  and `src.python.pkg.mod`) and Pyrefly reports spurious errors where one flows into the other.
+
+  For `check` and `pyrefly-suppress`, the plugin removes the nesting structurally: each source root's
+  files are re-staged in the sandbox under its own sibling directory (`__pyrefly_root_<n>`) with the
+  root prefix stripped, and each of those is passed as a single `--search-path` alongside
+  `--disable-search-path-heuristics`. Sibling directories can't nest, so every file is reachable
+  under exactly one module identity no matter how `root_patterns` overlap. Pyrefly's synthetic paths
+  are mapped back to real repo paths in diagnostics, baseline files, and `suppress` edits, so this is
+  invisible in output.
+
+  The diagnostic goals (`pyrefly-coverage`, `pyrefly-dump-config`, `pyrefly-lsp-config`) don't
+  re-stage — they pass your real source roots, deduplicated to each file's *nearest* root. If
+  first-party code genuinely roots at both an ancestor and a nested root, both are kept and the
+  plugin warns; `[pyrefly].exclude_source_roots` force-drops one.
 - **Third-party deps:** Pants materializes the target's resolved requirements into a venv and points
   Pyrefly's `--python-interpreter-path` at it, so Pyrefly discovers `site-packages` and the target
   Python version exactly as `import` would at runtime.
@@ -172,6 +183,8 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 | Plugin version | Pants | Pyrefly (default) |
 | --- | --- | --- |
+| `1.0.0` | `2.27`–`2.33` | `1.2.0` |
+| `0.5.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.4.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.3.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.2.0` | `2.27`–`2.32` | `1.1.1` |
@@ -179,7 +192,26 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 The plugin supports both the legacy (`Get`/`MultiGet`) and modern (call-by-name) rules APIs through
 a small version-conditional import (the rules API changed at Pants 2.30, and again removed `Get`
-by 2.32). Verified on 2.27 and 2.32; in-between versions use the same modern API.
+by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33; in-between versions use the
+same modern API.
+
+## Stability
+
+From 1.0.0 on, this project follows [Semantic Versioning](https://semver.org/). Covered by the
+compatibility promise — a breaking change to any of these requires a major bump:
+
+- The goal names (`pyrefly-init`, `pyrefly-lsp-config`, `pyrefly-coverage`, `pyrefly-suppress`,
+  `pyrefly-update-baseline`, `pyrefly-dump-config`) and Pyrefly's participation in `check`.
+- The `[pyrefly]` option names documented under [Configuration](#configuration), and the
+  `skip_pyrefly` field.
+- The backend name `pants_pyrefly`, and the published wheel carrying no `pantsbuild.pants`
+  dependency.
+
+Not covered: the plugin's Python API (every module is an implementation detail — import nothing
+from `pants_pyrefly` directly), the default pinned Pyrefly version, the exact wording and layout of
+Pyrefly's own diagnostic output, and the sandbox staging mechanics described under
+[How import resolution works](#how-import-resolution-works). Dropping a Pants version that has
+reached end of life is a minor bump, not a major one.
 
 ## Development
 
