@@ -50,16 +50,18 @@ jobs:
       - name: Package (build the wheel + sdist)
         run: "pants package pants-plugins/pants_pyrefly:dist"
 
-  # Prove the version-conditional rules-API shim on every supported Pants line by consuming the
-  # plugin from source (via pythonpath) and running `check` on a good + a bad file. Lightweight:
-  # no per-version dev lockfiles needed. The full lint/check/test/package suite runs on 2.33 above.
+  # Exercise the version-conditional rules-API shim on a subset of the supported Pants minors (the
+  # latest patch of each) by consuming the plugin from source (via pythonpath) and running `check`
+  # on a good + a bad file. Lightweight: no per-version dev lockfiles needed. Every supported minor
+  # is covered before release by compat.yml. The full lint/check/test/package suite runs on 2.33
+  # above.
   smoke:
     name: smoke (Pants ${{ matrix.pants-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pants-version: ["2.27.0", "2.31.0", "2.32.0", "2.33.0"]
+        pants-version: ["2.27.1", "2.31.0", "2.32.1", "2.33.1"]
     steps:
       - uses: actions/checkout@v5
 

@@ -6,10 +6,10 @@
 # passes and a broken file fails. This exercises the version-conditional rules-API shim end to
 # end on whatever PANTS_VERSION is requested, without needing per-version dev lockfiles.
 #
-# Usage: PANTS_VERSION=2.27.0 build-support/ci/smoke_test.sh
+# Usage: PANTS_VERSION=2.27.1 build-support/ci/smoke_test.sh
 set -euo pipefail
 
-PANTS_VERSION="${PANTS_VERSION:?set PANTS_VERSION, e.g. 2.27.0}"
+PANTS_VERSION="${PANTS_VERSION:?set PANTS_VERSION, e.g. 2.27.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLUGIN_SRC="${REPO_ROOT}/pants-plugins/pants_pyrefly"
 
