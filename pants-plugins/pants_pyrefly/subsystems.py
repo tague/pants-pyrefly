@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from pants.backend.python.util_rules.interpreter_constraints import InterpreterConstraints
 from pants.core.goals.resolves import ExportableTool
 from pants.core.util_rules.config_files import ConfigFilesRequest
-from pants.core.util_rules.external_tool import TemplatedExternalTool
+from pants.core.util_rules.external_tool import ExternalToolRequest, TemplatedExternalTool
 from pants.engine.platform import Platform
 from pants.engine.rules import Rule, collect_rules
 from pants.engine.unions import UnionRule
@@ -20,14 +20,25 @@ from pants.option.option_types import (
     StrListOption,
     StrOption,
 )
-from pants.util.strutil import help_text
+from pants.util.strutil import help_text, softwrap
 
 # The oldest Pyrefly release the plugin ships pins for. `Pyrefly.default_known_versions` carries
-# every stable Pyrefly release from this version up to `Pyrefly.default_version`, so any of them
-# can be selected with `[pyrefly].version` alone. 1.1.1 was the plugin's first default. During
-# plugin 1.x this only moves down (older releases are added on request), never up.
+# every stable Pyrefly release from this version up to (at least) `Pyrefly.default_version`, minus
+# `DENYLISTED_VERSIONS`, so any of them can be selected with `[pyrefly].version` alone. 1.1.1 was
+# the plugin's first default. Older releases are added on request by lowering this; raising it is
+# a deliberate decision that needs a CHANGELOG note.
 # `build-support/bin/generate_known_versions.py` reads this value; it is the single source of truth.
 MINIMUM_PINNED_VERSION = "1.1.1"
+
+# Pyrefly releases deliberately NOT pinned, mapped to the reason. Maintained only via
+# `generate_known_versions.py --remove VERSION --reason TEXT` (which also deletes the pins); the
+# generator never re-adds these. Selecting one with `[pyrefly].version` fails with the reason
+# unless the user supplies their own `[pyrefly].known_versions` entry for it.
+DENYLISTED_VERSIONS: dict[str, str] = {}
+
+
+class DenylistedPyreflyVersion(Exception):
+    """The configured Pyrefly version was deliberately removed from the plugin's pins."""
 
 
 class Pyrefly(TemplatedExternalTool):
@@ -195,6 +206,26 @@ class Pyrefly(TemplatedExternalTool):
     @property
     def interpreter_constraints(self) -> InterpreterConstraints:
         return InterpreterConstraints(self._interpreter_constraints)
+
+    def get_request(self, plat: Platform) -> ExternalToolRequest:
+        # A denylisted version has no default pin, so Pants would fail with a generic
+        # `UnknownVersion`. Say why instead -- unless the user pinned it themselves via
+        # `known_versions`, which is a deliberate choice we don't block.
+        reason = DENYLISTED_VERSIONS.get(self.version)
+        if reason is not None and self.known_version(plat) is None:
+            supported = ", ".join(dict.fromkeys(kv.split("|", 1)[0] for kv in self.known_versions))
+            raise DenylistedPyreflyVersion(
+                softwrap(
+                    f"""
+                    Pyrefly {self.version} is not supported by pants-pyrefly: {reason}
+
+                    Set `[pyrefly].version` to a supported release ({supported}), or, to use
+                    {self.version} anyway, add your own `[pyrefly].known_versions` entry for it on
+                    {plat.value}.
+                    """
+                )
+            )
+        return super().get_request(plat)
 
     def generate_exe(self, plat: Platform) -> str:
         # Every release archive unpacks to a single `pyrefly` binary at the root.

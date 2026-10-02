@@ -28,6 +28,7 @@ from pants_pyrefly.rules import (
     _remap_path,
     _remap_text,
 )
+from pants_pyrefly import subsystems
 from pants_pyrefly.subsystems import MINIMUM_PINNED_VERSION, Pyrefly
 
 from pants.backend.python import target_types_rules
@@ -41,6 +42,7 @@ from pants.backend.python.util_rules import pex, pex_environment, pex_from_targe
 from pants.core.goals.check import CheckResult, CheckResults
 from pants.core.util_rules import config_files, external_tool, source_files
 from pants.engine.addresses import Address
+from pants.engine.internals.scheduler import ExecutionError
 from pants.engine.rules import QueryRule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
@@ -659,6 +661,53 @@ def test_only_filters_error_kinds(rule_runner: PythonRuleRunner) -> None:
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
     filtered = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-only=bad-assignment"])
     assert filtered[0].exit_code == 0
+
+
+def _denylist(monkeypatch: pytest.MonkeyPatch, version: str, reason: str) -> list[str]:
+    """Denylist `version` as `--remove` would: drop its default pins. Returns the dropped pins."""
+    dropped = [kv for kv in Pyrefly.default_known_versions if kv.startswith(f"{version}|")]
+    assert dropped, f"{version} is not pinned"
+    monkeypatch.setattr(subsystems, "DENYLISTED_VERSIONS", {version: reason})
+    monkeypatch.setattr(
+        Pyrefly,
+        "default_known_versions",
+        [kv for kv in Pyrefly.default_known_versions if kv not in dropped],
+    )
+    return dropped
+
+
+def _clean_target(rule_runner: PythonRuleRunner) -> Target:
+    rule_runner.write_files(
+        {"src/project/f.py": "x: int = 1\n", "src/project/BUILD": "python_sources()"}
+    )
+    return rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+
+
+def test_denylisted_version_fails_with_reason(
+    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _denylist(monkeypatch, "1.2.1", "it miscompiles widgets")
+    tgt = _clean_target(rule_runner)
+    with pytest.raises(ExecutionError) as excinfo:
+        run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-version=1.2.1"])
+    message = str(excinfo.value)
+    assert "DenylistedPyreflyVersion" in message
+    assert "Pyrefly 1.2.1 is not supported by pants-pyrefly: it miscompiles widgets" in message
+    assert "UnknownVersion" not in message
+
+
+def test_denylisted_version_allowed_with_user_pins(
+    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A user who deliberately supplies their own pins for a denylisted version is not blocked.
+    dropped = _denylist(monkeypatch, "1.2.1", "it miscompiles widgets")
+    tgt = _clean_target(rule_runner)
+    result = run_pyrefly(
+        rule_runner,
+        [tgt],
+        extra_args=["--pyrefly-version=1.2.1", f"--pyrefly-known-versions={json.dumps(dropped)}"],
+    )
+    assert result[0].exit_code == 0
 
 
 def test_tool_failure_distinct_from_type_errors(rule_runner: PythonRuleRunner) -> None:
