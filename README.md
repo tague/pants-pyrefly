@@ -197,8 +197,9 @@ same modern API.
 
 ## Supported Pyrefly versions
 
-The plugin ships checksums for every stable Pyrefly release from **1.1.1** (the plugin's first
-default) up to its default, so any of them can be selected with `version` alone:
+The plugin ships checksums for a set of stable Pyrefly releases, from **1.1.1** (the plugin's
+first default) upward. Every version listed in its `default_known_versions` is pinned and tested,
+and any of them can be selected with `version` alone:
 
 ```toml
 [pyrefly]
@@ -207,23 +208,20 @@ version = "1.2.0"
 
 Pre-releases (`X.Y.Z-dev.N`) are never pinned; to run one, set `known_versions` yourself. The policy:
 
-- New stable Pyrefly releases are added as they come out, including backports to older lines.
+- New Pyrefly releases are considered as they come out, including backports to older lines.
 - A pinned version is removed only deliberately, with the reason recorded in the plugin's
   `DENYLISTED_VERSIONS` (in `subsystems.py`) and a CHANGELOG note.
 - Versions older than 1.1.1 are added on request: [open an issue](https://github.com/tague/pants-pyrefly/issues).
 
 Selecting a denylisted version fails with the recorded reason rather than a generic
-`UnknownVersion`:
+`UnknownVersion`, and suggests the plugin's default:
 
 ```
-DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>
-
-Set `[pyrefly].version` to a supported release (1.3.2, 1.3.1, …), or, to use 1.2.1 anyway, add
-your own `[pyrefly].known_versions` entry for it on linux_x86_64.
+DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.3.2).
 ```
 
-Supplying your own `known_versions` entry for that version is a deliberate choice, and the plugin
-does not block it.
+To use a denylisted version anyway, supply your own `[pyrefly].known_versions` entry for it on
+your platform. That is a deliberate choice, and the plugin does not block it.
 
 Every supported version is exercised by the [compatibility suite](#pyrefly-compatibility-suite)
 before each release.
@@ -292,7 +290,15 @@ python3 $GEN --list-versions                  # supported versions as JSON (the 
 - `--remove` is the only removal path: it deletes the version's pins (if any) and records the
   reason in `DENYLISTED_VERSIONS`, so `--write` never re-adds it and `--check-upstream` stops
   reporting it. It also works for a never-pinned release you want to skip. It refuses the
-  default, and it refuses the minimum: raise `MINIMUM_PINNED_VERSION` deliberately instead.
+  default, and it refuses the minimum: raise `MINIMUM_PINNED_VERSION` deliberately instead. The
+  reason must be a single line; it is stored exactly as typed, in the quote style `ruff format`
+  prefers (long reasons are split across adjacent string literals), so no `pants fmt` is needed.
+- `--write` and `--remove` edit `subsystems.py` line by line: they change only the
+  `default_version` literal, insert or delete pin lines, and add a denylist entry. Every other line,
+  including comments and quoting, is left byte-identical.
+
+If Pyrefly withdraws a pinned release (deletes it, or re-labels it as a pre-release), `--check`
+fails, and the fix is `--remove <version> --reason "..."`.
 
 The script fetches each asset's published `.sha256` sidecar (rejecting anything that isn't a
 64-character hex digest) and size from the GitHub release, retrying transient failures up to twice.
@@ -305,7 +311,9 @@ source and drives real Pants runs with only `--pyrefly-version=<version>` set, s
 resolve the download. It checks that a clean file passes, that a missing import fails with
 `missing-import`, that `pyrefly-update-baseline` followed by a gated `check` passes, and that
 `pyrefly-suppress` followed by `check` passes. For every Pyrefly process it asserts, from the
-binary in that process's preserved sandbox, that `<version>` is what actually ran.
+binary in that process's preserved sandbox, that `<version>` is what actually ran. Each Pants run
+uses an execution root inside the script's own work directory, so the script leaves nothing behind
+in `$TMPDIR`.
 
 The [compatibility workflow](.github/workflows/compat.yml) runs the script for every supported
 version (`--list-versions`), one job each. It runs on demand and as a required step of the release

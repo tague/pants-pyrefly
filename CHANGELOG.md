@@ -38,22 +38,25 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 - **Removed Pyrefly versions now fail with a reason.** A version is removed from the pins only
   deliberately, with the reason recorded in `DENYLISTED_VERSIONS` (in `subsystems.py`) and a
   CHANGELOG note. Selecting one with `[pyrefly].version` fails with
-  `DenylistedPyreflyVersion: Pyrefly X is not supported by pants-pyrefly: <reason>` and lists the
-  supported releases, instead of Pants's generic `UnknownVersion`. Supplying your own
-  `[pyrefly].known_versions` entry for it still works. The denylist is empty in this release.
+  `DenylistedPyreflyVersion: Pyrefly X is not supported by pants-pyrefly: <reason>. Set
+  [pyrefly].version to a supported release (<default>).` instead of Pants's generic
+  `UnknownVersion`. Supplying your own `[pyrefly].known_versions` entry for it still works. The
+  denylist is empty in this release.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
   `pyrefly-suppress` with only `--pyrefly-version` set, and asserts that the requested Pyrefly
   binary is the one that ran. The release workflow publishes nothing if any version fails.
-- Maintenance: `build-support/bin/generate_known_versions.py` now manages the whole pinned range.
+- Maintenance: `build-support/bin/generate_known_versions.py` now manages the pins.
   `--write` only adds pins (stable releases up to the default, skipping pre-releases and denylisted
   versions) and never rewrites existing ones. `--check` verifies only the shipped pins (checksums,
   default pinned, order, nothing denylisted), so new upstream releases or backports never fail it.
   `--check-upstream` lists stable releases that are neither pinned nor denylisted. `--remove` is
-  the only way to drop a version, and `--list-versions` prints the supported set. The script now
-  sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars, and
-  retries transient network failures.
+  the only way to drop a version, and `--list-versions` prints the supported set. `--write` and
+  `--remove` edit `subsystems.py` line by line, leaving comments and formatting untouched, and
+  denylist reasons are written as single-line UTF-8 literals in `ruff format`'s quote style. The
+  script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
+  and retries transient network failures, including downloads cut off mid-body.
 
 ## 1.0.0 (2026-08-13)
 
