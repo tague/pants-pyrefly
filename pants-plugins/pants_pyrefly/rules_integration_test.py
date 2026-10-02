@@ -6,6 +6,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import stat
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest  # pants: no-infer-dep
 import toml  # pants: no-infer-dep
@@ -52,9 +56,38 @@ from pants.util.frozendict import FrozenDict
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
 
 
+def _remove_tree(path: Path) -> None:
+    """Remove `path`, including the read-only directories Pants makes for immutable inputs.
+
+    Pants also deletes finished sandboxes asynchronously, so entries may vanish mid-walk.
+    """
+
+    def on_error(function, failed_path, error: BaseException) -> None:
+        if isinstance(error, FileNotFoundError):
+            return
+        if isinstance(error, PermissionError):
+            parent = os.path.dirname(failed_path)
+            os.chmod(parent, stat.S_IRWXU)
+            if os.path.isdir(failed_path) and not os.path.islink(failed_path):
+                os.chmod(failed_path, stat.S_IRWXU)
+                shutil.rmtree(failed_path, onexc=on_error)
+            else:
+                function(failed_path)
+            return
+        raise error
+
+    shutil.rmtree(path, onexc=on_error)
+
+
 @pytest.fixture
-def rule_runner() -> PythonRuleRunner:
-    return PythonRuleRunner(
+def rule_runner(tmp_path: Path) -> Iterator[PythonRuleRunner]:
+    # The test sandbox gets no TMPDIR, so the inner Pants would default its execution root to
+    # /tmp and leave its read-only `immutable_inputs*` directories (the Pyrefly binary, ~20MB
+    # each) there. Keep everything it executes under pytest's tmp_path, and remove it afterwards.
+    exec_root = tmp_path / "pants-exec-root"
+    exec_root.mkdir()
+    yield PythonRuleRunner(
+        bootstrap_args=[f"--local-execution-root-dir={exec_root}"],
         rules=[
             *pyrefly_register_rules(),
             *target_types_rules.rules(),
@@ -73,6 +106,7 @@ def rule_runner() -> PythonRuleRunner:
             PythonRequirementTarget,
         ],
     )
+    _remove_tree(exec_root)
 
 
 def run_pyrefly(
