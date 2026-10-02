@@ -5,10 +5,9 @@
 """Maintain the Pyrefly `default_known_versions` pins in `subsystems.py`.
 
 Each pin is `"<version>|<pants_platform>|<sha256>|<size_bytes>"`, ordered newest version first and
-platforms in `default_url_platform_mapping` order. The plugin pins stable Pyrefly releases from
-`MINIMUM_PINNED_VERSION` up to (at least) `Pyrefly.default_version`, except the ones recorded in
-`DENYLISTED_VERSIONS` (version -> reason). Pre-releases (`X.Y.Z-dev.N` etc.) and drafts are never
-pinned.
+platforms in `default_url_platform_mapping` order. Every version listed is pinned and tested; none
+is older than `MINIMUM_PINNED_VERSION`, and none is in `DENYLISTED_VERSIONS` (version -> reason).
+Only stable releases are pinned, never pre-releases (`X.Y.Z-dev.N` etc.) or drafts.
 
 Everything is read from the plugin's own `subsystems.py` via `ast`, so the script and the plugin can
 never disagree on the minimum, denylist, default, URL template, or platform mapping.
@@ -24,7 +23,10 @@ Usage (run directly; pure stdlib, no Pants required):
     python3 $GEN --remove 1.2.2 --reason "miscompiles X"  # drop pins + denylist (only removal path)
     python3 $GEN --list-versions          # JSON list of supported versions, for a CI matrix
 
-`--write` only adds: it never removes or rewrites an existing pin, and it reports (exit 1) any
+`--write` and `--remove` edit `subsystems.py` line by line: `--write` changes only the
+`default_version` literal and inserts new pin lines, and `--remove` deletes only that version's pin
+lines and adds only its denylist entry. Every other line (comments, quoting, formatting) is left
+byte-identical. `--write` never removes or rewrites an existing pin, and it reports (exit 1) any
 existing pin that disagrees with the release instead of overwriting it.
 
 `--check` verifies only what ships: every committed pin's sha256/size matches its release, the
@@ -41,13 +43,16 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import http.client
+import io
 import json
 import os
 import re
 import socket
 import sys
-import textwrap
 import time
+import tokenize
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
@@ -99,11 +104,8 @@ def _version_key(version: str) -> Version:
 
 
 # ---
-# Reading / writing subsystems.py
+# Reading subsystems.py
 # ---
-
-
-Span = tuple[int, int]
 
 
 @dataclass
@@ -116,10 +118,6 @@ class PluginConfig:
     url_template: str
     platform_mapping: dict[str, str]
     known_versions: list[str]
-    # 1-based inclusive line spans of the assignments the script rewrites.
-    denylist_span: Span
-    version_span: Span
-    known_versions_span: Span
 
 
 def _find_class(tree: ast.Module, name: str) -> ast.ClassDef:
@@ -142,99 +140,340 @@ def _assignments(body: Iterable[ast.stmt]) -> dict[str, ast.Assign | ast.AnnAssi
     return out
 
 
-def _value(node: ast.Assign | ast.AnnAssign):
-    assert node.value is not None
-    return ast.literal_eval(node.value)
-
-
-def _span(node: ast.stmt) -> Span:
-    return node.lineno, node.end_lineno or node.lineno
-
-
-def parse_plugin_config(text: str) -> PluginConfig:
+def _locate(text: str) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
+    """The value nodes of the module-level and `class Pyrefly` assignments we read or edit."""
     tree = ast.parse(text)
     module_assigns = _assignments(tree.body)
     for required in (MINIMUM_CONSTANT, DENYLIST_CONSTANT):
         if required not in module_assigns:
             raise ValueError(f"module-level `{required}` not found in subsystems.py")
-    assigns = _assignments(_find_class(tree, "Pyrefly").body)
+    class_assigns = _assignments(_find_class(tree, "Pyrefly").body)
     for required in (
         "default_version",
         "default_url_template",
         "default_url_platform_mapping",
         "default_known_versions",
     ):
-        if required not in assigns:
+        if required not in class_assigns:
             raise ValueError(f"`Pyrefly.{required}` not found in subsystems.py")
 
-    denylist = _value(module_assigns[DENYLIST_CONSTANT])
+    def values(assigns: dict[str, ast.Assign | ast.AnnAssign]) -> dict[str, ast.expr]:
+        return {name: node.value for name, node in assigns.items() if node.value is not None}
+
+    return values(module_assigns), values(class_assigns)
+
+
+def parse_plugin_config(text: str) -> PluginConfig:
+    module_values, class_values = _locate(text)
+    denylist = ast.literal_eval(module_values[DENYLIST_CONSTANT])
     if not isinstance(denylist, dict):
         raise ValueError(f"`{DENYLIST_CONSTANT}` must be a dict of version -> reason")
     return PluginConfig(
-        minimum_version=_value(module_assigns[MINIMUM_CONSTANT]),
+        minimum_version=ast.literal_eval(module_values[MINIMUM_CONSTANT]),
         denylist=denylist,
-        version=_value(assigns["default_version"]),
-        url_template=_value(assigns["default_url_template"]),
-        platform_mapping=_value(assigns["default_url_platform_mapping"]),
-        known_versions=_value(assigns["default_known_versions"]),
-        denylist_span=_span(module_assigns[DENYLIST_CONSTANT]),
-        version_span=_span(assigns["default_version"]),
-        known_versions_span=_span(assigns["default_known_versions"]),
+        version=ast.literal_eval(class_values["default_version"]),
+        url_template=ast.literal_eval(class_values["default_url_template"]),
+        platform_mapping=ast.literal_eval(class_values["default_url_platform_mapping"]),
+        known_versions=ast.literal_eval(class_values["default_known_versions"]),
     )
 
 
-def render_known_versions_block(pins: list[str]) -> list[str]:
-    lines = ["    default_known_versions = ["]
-    lines += [f'        "{pin}",' for pin in pins]
-    lines.append("    ]")
-    return lines
+# ---
+# Rendering Python string literals the way `ruff format` would leave them
+# ---
+
+MAX_LINE_WIDTH = 100
+# Characters a reason may not contain: they would break the single-line literal (or the file).
+_FORBIDDEN_CATEGORIES = {"Cc", "Zl", "Zp", "Cs"}
+
+
+def _width(text: str) -> int:
+    """Display width as ruff measures it for the line-length limit (wide/fullwidth = 2)."""
+    return sum(2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in text)
+
+
+def py_literal(value: str) -> str:
+    """A string literal for `value` in ruff format's preferred quote style.
+
+    Double quotes, unless the value contains more double quotes than single quotes. Characters are
+    written as-is (UTF-8), never as `\\u`/surrogate escapes.
+    """
+    quote = "'" if value.count('"') > value.count("'") else '"'
+    body = value.replace("\\", "\\\\").replace(quote, "\\" + quote)
+    return f"{quote}{body}{quote}"
+
+
+def validate_reason(reason: str) -> None:
+    if not reason.strip():
+        raise ValueError("reason must not be empty")
+    for char in reason:
+        if unicodedata.category(char) in _FORBIDDEN_CATEGORIES:
+            raise ValueError(
+                f"reason must be a single line: it contains {char!r}, a newline, tab, or other "
+                "control character"
+            )
+
+
+def _split_reason(reason: str, indent: str) -> list[str]:
+    """Split `reason` into pieces whose literals fit on their own lines; they join back exactly."""
+    budget = MAX_LINE_WIDTH - len(indent)
+    pieces: list[str] = []
+    current = ""
+    for word in re.findall(r"\S+\s*|\s+", reason):
+        while word:
+            candidate = current + word
+            if _width(py_literal(candidate)) <= budget:
+                current, word = candidate, ""
+            elif current:
+                pieces.append(current)
+                current = ""
+            else:
+                # A single word too long for one line: hard-split it.
+                cut = len(word)
+                while cut > 1 and _width(py_literal(word[:cut])) > budget:
+                    cut -= 1
+                pieces.append(word[:cut])
+                word = word[cut:]
+    if current:
+        pieces.append(current)
+    assert "".join(pieces) == reason
+    return pieces
+
+
+def render_denylist_entry(version: str, reason: str, indent: str) -> list[str]:
+    key = py_literal(version)
+    one_line = f"{indent}{key}: {py_literal(reason)},"
+    if _width(one_line) <= MAX_LINE_WIDTH:
+        return [one_line]
+    inner = indent + "    "
+    return [
+        f"{indent}{key}: (",
+        *(f"{inner}{py_literal(piece)}" for piece in _split_reason(reason, inner)),
+        f"{indent}),",
+    ]
 
 
 def render_denylist_block(denylist: dict[str, str]) -> list[str]:
+    """A fresh `DENYLISTED_VERSIONS` assignment (used for test fixtures and docs)."""
     head = f"{DENYLIST_CONSTANT}: dict[str, str] = "
     if not denylist:
         return [head + "{}"]
     lines = [head + "{"]
     for version in sorted(denylist, key=_version_key, reverse=True):
-        key = json.dumps(version)
-        value = json.dumps(denylist[version])
-        one_line = f"    {key}: {value},"
-        if len(one_line) <= 100:
-            lines.append(one_line)
-            continue
-        # Too long for the 100-column lint limit: split into implicitly concatenated pieces.
-        pieces = textwrap.wrap(
-            denylist[version], width=80, drop_whitespace=False, break_on_hyphens=False
-        )
-        lines.append(f"    {key}: (")
-        lines += [f"        {json.dumps(piece)}" for piece in pieces]
-        lines.append("    ),")
+        lines += render_denylist_entry(version, denylist[version], "    ")
     lines.append("}")
     return lines
 
 
-def rewrite_subsystems(
-    path: Path,
-    config: PluginConfig,
-    *,
-    version: str,
-    pins: list[str],
-    denylist: dict[str, str],
-) -> None:
-    lines = path.read_text().splitlines()
-    replacements = [
-        (config.known_versions_span, render_known_versions_block(pins)),
-        (config.version_span, [f'    default_version = "{version}"']),
-        (config.denylist_span, render_denylist_block(denylist)),
-    ]
-    # Replace bottom-up so earlier spans' line numbers stay valid.
-    for (start, end), new_lines in sorted(replacements, key=lambda r: r[0][0], reverse=True):
-        lines[start - 1 : end] = new_lines
-    path.write_text("\n".join(lines) + "\n")
+def render_known_versions_block(pins: list[str]) -> list[str]:
+    """A fresh `default_known_versions` assignment (used for test fixtures)."""
+    return ["    default_known_versions = [", *(f'        "{pin}",' for pin in pins), "    ]"]
 
 
 # ---
-# Pins: parsing, ordering, merging
+# Editing subsystems.py in place: only the lines that must change are touched
+# ---
+
+
+class LayoutError(ValueError):
+    """The source layout is one the line-level editor does not handle."""
+
+
+def _split(text: str) -> list[str]:
+    # Split on "\n" only (not str.splitlines, which also splits on \x0c,  , ...), so joining
+    # with "\n" reproduces the file byte for byte.
+    return text.split("\n")
+
+
+def _leading_ws(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _byte_slice(line: str, start: int, end: int | None = None) -> str:
+    # ast column offsets are UTF-8 byte offsets.
+    return line.encode()[start:end].decode()
+
+
+def _char_col(line: str, byte_col: int) -> int:
+    return len(_byte_slice(line, 0, byte_col))
+
+
+def _anchor_above_comments(lines: list[str], index: int, floor: int) -> int:
+    """Move an insertion point above the comment lines directly preceding line `index`."""
+    while index - 1 > floor and lines[index - 1].lstrip().startswith("#"):
+        index -= 1
+    return index
+
+
+def _ensure_trailing_comma(text: str, container: ast.expr) -> str:
+    """Make sure the last item of a multi-line list/dict is followed by a comma."""
+    lines = _split(text)
+    close_row = container.end_lineno or container.lineno
+    close_col = _char_col(lines[close_row - 1], (container.end_col_offset or 1) - 1)
+    previous = None
+    skip = {tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT}
+    for token in tokenize.generate_tokens(io.StringIO(text).readline):
+        if token.start == (close_row, close_col):
+            break
+        if token.type not in skip:
+            previous = token
+    if previous is None or previous.string in (",", "[", "{"):
+        return text
+    row, col = previous.end
+    line = lines[row - 1]
+    lines[row - 1] = line[:col] + "," + line[col:]
+    return "\n".join(lines)
+
+
+def _check_one_item_per_line(
+    lines: list[str], container: ast.expr, items: list[ast.expr], what: str
+) -> None:
+    open_index = container.lineno - 1
+    close_index = (container.end_lineno or container.lineno) - 1
+    closer = "]" if isinstance(container, ast.List) else "}"
+    ok = lines[close_index].lstrip().startswith(closer) and all(
+        item.lineno - 1 > open_index and (item.end_lineno or item.lineno) - 1 < close_index
+        for item in items
+    )
+    if not ok:
+        raise LayoutError(
+            f"`{what}` must put its opening and closing brackets on their own lines, one entry "
+            "per line (the layout `pants fmt` produces); edit it by hand or reformat it first"
+        )
+
+
+def _expand_empty_inline(
+    lines: list[str], container: ast.expr, opener: str, closer: str, new_items: list[str]
+) -> list[str]:
+    """Turn a one-line empty `[]`/`{}` into a block holding `new_items` (already indented)."""
+    index = container.lineno - 1
+    line = lines[index]
+    prefix = _byte_slice(line, 0, container.col_offset)
+    suffix = _byte_slice(line, container.end_col_offset or 0)
+    return (
+        lines[:index]
+        + [prefix + opener, *new_items, _leading_ws(line) + closer + suffix]
+        + lines[index + 1 :]
+    )
+
+
+def edit_default_version(text: str, version: str) -> str:
+    """Replace only the version literal on the `default_version` line (keeping quotes/comments)."""
+    _, class_values = _locate(text)
+    node = class_values["default_version"]
+    lines = _split(text)
+    index = node.lineno - 1
+    line = lines[index]
+    old = _byte_slice(line, node.col_offset, node.end_col_offset)
+    quote = old[0] if old[:1] in ("'", '"') else '"'
+    lines[index] = (
+        _byte_slice(line, 0, node.col_offset)
+        + f"{quote}{version}{quote}"
+        + _byte_slice(line, node.end_col_offset)
+    )
+    return "\n".join(lines)
+
+
+def edit_insert_pins(text: str, new_pins: list[str], platform_mapping: dict[str, str]) -> str:
+    """Insert each new pin line at its canonical position; every other line is left as-is."""
+    if not new_pins:
+        return text
+    _, class_values = _locate(text)
+    node = class_values["default_known_versions"]
+    assert isinstance(node, ast.List)
+    lines = _split(text)
+    ordered = canonical_order(new_pins, platform_mapping)
+
+    if not node.elts:
+        indent = _leading_ws(lines[node.lineno - 1]) + "    "
+        rendered = [f'{indent}"{pin}",' for pin in ordered]
+        if node.lineno == node.end_lineno:
+            return "\n".join(_expand_empty_inline(lines, node, "[", "]", rendered))
+        close_index = (node.end_lineno or node.lineno) - 1
+        return "\n".join(lines[:close_index] + rendered + lines[close_index:])
+
+    _check_one_item_per_line(lines, node, list(node.elts), "default_known_versions")
+    existing = [(ast.literal_eval(element), element) for element in node.elts]
+    indent = _leading_ws(lines[node.elts[0].lineno - 1])
+    open_index = node.lineno - 1
+    close_index = (node.end_lineno or node.lineno) - 1
+
+    groups: dict[int, list[str]] = {}
+    for pin in ordered:
+        key = _pin_sort_key(pin, platform_mapping)
+        following = next(
+            (el for value, el in existing if _pin_sort_key(value, platform_mapping) > key), None
+        )
+        index = (
+            _anchor_above_comments(lines, following.lineno - 1, open_index)
+            if following is not None
+            else close_index
+        )
+        groups.setdefault(index, []).append(f'{indent}"{pin}",')
+
+    if close_index in groups:
+        text = _ensure_trailing_comma(text, node)
+        lines = _split(text)
+    for index in sorted(groups, reverse=True):
+        lines[index:index] = groups[index]
+    return "\n".join(lines)
+
+
+def edit_remove_pins(text: str, version: str) -> str:
+    """Delete only the lines holding `version`'s pins."""
+    _, class_values = _locate(text)
+    node = class_values["default_known_versions"]
+    assert isinstance(node, ast.List)
+    lines = _split(text)
+    doomed: set[int] = set()
+    for element in node.elts:
+        value = ast.literal_eval(element)
+        if not isinstance(value, str) or pin_version(value) != version:
+            continue
+        first, last = element.lineno - 1, (element.end_lineno or element.lineno) - 1
+        before = _byte_slice(lines[first], 0, element.col_offset)
+        after = _byte_slice(lines[last], element.end_col_offset or 0)
+        if before.strip() or not re.fullmatch(r"\s*,?\s*(#.*)?", after):
+            raise LayoutError(f"the pin {value!r} shares a line with other code; remove it by hand")
+        doomed.update(range(first, last + 1))
+    return "\n".join(line for index, line in enumerate(lines) if index not in doomed)
+
+
+def edit_add_denylist_entry(text: str, version: str, reason: str) -> str:
+    """Add one `DENYLISTED_VERSIONS` entry (newest first); existing lines are left as-is."""
+    module_values, _ = _locate(text)
+    node = module_values[DENYLIST_CONSTANT]
+    if not isinstance(node, ast.Dict):
+        raise LayoutError(f"`{DENYLIST_CONSTANT}` must be a dict literal")
+    lines = _split(text)
+    open_index = node.lineno - 1
+    close_index = (node.end_lineno or node.lineno) - 1
+
+    if not node.keys:
+        indent = _leading_ws(lines[open_index]) + "    "
+        rendered = render_denylist_entry(version, reason, indent)
+        if node.lineno == node.end_lineno:
+            return "\n".join(_expand_empty_inline(lines, node, "{", "}", rendered))
+        return "\n".join(lines[:close_index] + rendered + lines[close_index:])
+
+    keys = [key for key in node.keys if key is not None]
+    _check_one_item_per_line(lines, node, [*keys, *node.values], DENYLIST_CONSTANT)
+    indent = _leading_ws(lines[keys[0].lineno - 1])
+    rendered = render_denylist_entry(version, reason, indent)
+    new_key = _version_key(version)
+    following = next((key for key in keys if _version_key(ast.literal_eval(key)) < new_key), None)
+    if following is not None:
+        index = _anchor_above_comments(lines, following.lineno - 1, open_index)
+    else:
+        text = _ensure_trailing_comma(text, node)
+        lines = _split(text)
+        index = close_index
+    lines[index:index] = rendered
+    return "\n".join(lines)
+
+
+# ---
+# Pins: parsing and ordering
 # ---
 
 
@@ -263,34 +502,27 @@ def canonical_order(pins: list[str], platform_mapping: dict[str, str]) -> list[s
     return sorted(pins, key=lambda pin: _pin_sort_key(pin, platform_mapping))
 
 
-def insert_pins(existing: list[str], new: list[str], platform_mapping: dict[str, str]) -> list[str]:
-    """Insert `new` pins at their canonical positions without moving or editing `existing` ones."""
-    merged = list(existing)
-    for pin in canonical_order(new, platform_mapping):
-        key = _pin_sort_key(pin, platform_mapping)
-        index = next(
-            (i for i, other in enumerate(merged) if _pin_sort_key(other, platform_mapping) > key),
-            len(merged),
-        )
-        merged.insert(index, pin)
-    return merged
-
-
 # ---
 # Network
 # ---
 
 
-class _TransientError(Exception):
-    pass
-
-
 def _is_transient(error: Exception) -> bool:
     if isinstance(error, urllib.error.HTTPError):
         return error.code == 429 or error.code >= 500
-    # URLError wraps connection failures (refused, DNS, reset); timeouts surface as
-    # socket.timeout / TimeoutError either directly or wrapped in URLError.
-    return isinstance(error, (urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError))
+    # URLError wraps connection failures (refused, DNS); timeouts surface as socket.timeout /
+    # TimeoutError, directly or wrapped in URLError. A connection reset mid-body is a
+    # ConnectionError (ConnectionResetError), and a body cut short is http.client.IncompleteRead.
+    return isinstance(
+        error,
+        (
+            urllib.error.URLError,
+            TimeoutError,
+            socket.timeout,
+            ConnectionError,
+            http.client.IncompleteRead,
+        ),
+    )
 
 
 def _request(url: str, token: str | None) -> urllib.request.Request:
@@ -499,6 +731,12 @@ def run_check_upstream(config: PluginConfig, token: str | None) -> int:
     return 1
 
 
+def _write_checked(path: Path, text: str, check) -> None:
+    """Write `text` only if it still parses and `check(config)` holds for the result."""
+    check(parse_plugin_config(text))
+    path.write_text(text, encoding="utf-8")
+
+
 def run_write(path: Path, config: PluginConfig, version: str, token: str | None) -> int:
     target = _require_stable(version, "--version")
     if target < _version_key(config.minimum_version):
@@ -529,8 +767,22 @@ def run_write(path: Path, config: PluginConfig, version: str, token: str | None)
         reverse=True,
     )
     new_pins = [pin for tag in to_add for pin in pins_for_release(config, releases[tag], token)]
-    merged = insert_pins(config.known_versions, new_pins, config.platform_mapping)
-    rewrite_subsystems(path, config, version=version, pins=merged, denylist=config.denylist)
+
+    # Edit lines in place: only the `default_version` literal changes, and new pin lines are
+    # inserted. Every other line stays byte-identical.
+    text = path.read_text(encoding="utf-8")
+    if version != config.version:
+        text = edit_default_version(text, version)
+    text = edit_insert_pins(text, new_pins, config.platform_mapping)
+
+    def check(updated: PluginConfig) -> None:
+        # The default moved, exactly the new pins were added, and existing pins kept their order.
+        assert updated.version == version
+        assert sorted(updated.known_versions) == sorted([*config.known_versions, *new_pins])
+        kept = [pin for pin in updated.known_versions if pin not in new_pins]
+        assert kept == config.known_versions
+
+    _write_checked(path, text, check)
 
     added = ", ".join(to_add) if to_add else "none"
     print(f"Set default_version = {version}; added pins for: {added}.")
@@ -544,8 +796,10 @@ def run_write(path: Path, config: PluginConfig, version: str, token: str | None)
 
 def run_remove(path: Path, config: PluginConfig, version: str, reason: str) -> int:
     _require_stable(version, "--remove")
-    if not reason.strip():
-        raise SystemExit("error: --remove needs a non-empty --reason")
+    try:
+        validate_reason(reason)
+    except ValueError as error:
+        raise SystemExit(f"error: --reason: {error}") from None
     if version == config.version:
         raise SystemExit(
             f"error: refusing to remove the default version {version}; move the default first "
@@ -556,11 +810,22 @@ def run_remove(path: Path, config: PluginConfig, version: str, reason: str) -> i
             f"error: refusing to remove MINIMUM_PINNED_VERSION {version}; raise "
             "MINIMUM_PINNED_VERSION in subsystems.py deliberately instead (with a CHANGELOG note)"
         )
+    if version in config.denylist:
+        raise SystemExit(f"error: {version} is already denylisted: {config.denylist[version]}")
+
+    # Edit lines in place: delete only this version's pin lines and add only the new entry.
+    text = path.read_text(encoding="utf-8")
+    text = edit_remove_pins(text, version)
+    text = edit_add_denylist_entry(text, version, reason)
     remaining = [pin for pin in config.known_versions if pin_version(pin) != version]
+
+    def check(updated: PluginConfig) -> None:
+        assert updated.known_versions == remaining
+        assert updated.denylist == {**config.denylist, version: reason}
+
+    _write_checked(path, text, check)
     removed = len(config.known_versions) - len(remaining)
-    denylist = {**config.denylist, version: reason.strip()}
-    rewrite_subsystems(path, config, version=config.version, pins=remaining, denylist=denylist)
-    print(f"Removed {removed} pin(s) for {version} and denylisted it: {reason.strip()}")
+    print(f"Removed {removed} pin(s) for {version} and denylisted it: {reason}")
     return 0
 
 
@@ -606,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.version is not None and not args.write:
         parser.error("--version is only valid with --write")
 
-    config = parse_plugin_config(args.subsystems.read_text())
+    config = parse_plugin_config(args.subsystems.read_text(encoding="utf-8"))
 
     if args.list_versions:
         print(json.dumps(supported_versions(config)))

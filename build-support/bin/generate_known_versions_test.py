@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import socket
@@ -484,3 +485,238 @@ def test_bad_sidecar_fails_pin_generation(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(gkv, "_get", lambda url, token: b"not-a-digest  file\n")
     with pytest.raises(ValueError, match="64-character hex sha256"):
         gkv.pins_for_release(gkv.parse_plugin_config(_SUBSYSTEMS), release, None)
+
+
+# --- reasons: encoding, quoting, validation, wrapping ---
+
+
+def _remove(path: Path, version: str, reason: str) -> int:
+    return gkv.main(["--subsystems", str(path), "--remove", version, "--reason", reason])
+
+
+def test_non_bmp_reason_is_written_as_utf8_and_round_trips(tmp_path) -> None:
+    reason = "crashes 💥 on startup (see 🐛 tracker)"
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    assert _remove(path, "1.2.1", reason) == 0
+    text = path.read_text(encoding="utf-8")
+    # Written as the real characters, never as `💥` surrogate escapes, which Python
+    # would read back as two lone surrogates.
+    assert "💥" in text and "\\ud83d" not in text and "\\U" not in text
+    assert _config(path).denylist == {"1.2.1": reason}
+
+
+@pytest.mark.parametrize(
+    ("reason", "literal"),
+    [
+        ("plain reason", '"plain reason"'),
+        ('says "boom" on start', "'says \"boom\" on start'"),
+        ("it's broken", '"it\'s broken"'),
+        # Both kinds: ruff keeps double quotes unless there are more double quotes than single.
+        ('it\'s "really" broken', "'it\\'s \"really\" broken'"),
+        ("it's \"x\" and isn't ok", '"it\'s \\"x\\" and isn\'t ok"'),
+        ("back\\slash", '"back\\\\slash"'),
+    ],
+)
+def test_reason_literal_uses_ruff_preferred_quotes(tmp_path, reason, literal) -> None:
+    assert gkv.py_literal(reason) == literal
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    assert _remove(path, "1.2.1", reason) == 0
+    assert f'    "1.2.1": {literal},' in path.read_text(encoding="utf-8").split("\n")
+    assert _config(path).denylist == {"1.2.1": reason}
+
+
+@pytest.mark.parametrize("bad", ["two\nlines", "tab\there", "nul\x00", "cr\rhere", "sep x"])
+def test_reason_must_be_a_single_line(tmp_path, bad) -> None:
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit, match="reason must be a single line"):
+        _remove(path, "1.2.1", bad)
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_long_reason_is_wrapped_but_stored_exactly(tmp_path) -> None:
+    # Double spaces, a trailing space, quotes, an emoji, and an unbreakable long word.
+    reason = (
+        'Pyrefly 1.2.1 reports  "bad-override" on every   dataclass that inherits a slotted '
+        "base, 💥 which breaks incremental adoption; " + "x" * 120 + " end "
+    )
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    assert _remove(path, "1.2.1", reason) == 0
+    lines = path.read_text(encoding="utf-8").split("\n")
+    assert all(gkv._width(line) <= 100 for line in lines)
+    assert '    "1.2.1": (' in lines
+    assert _config(path).denylist == {"1.2.1": reason}
+
+
+# --- line-level editing: everything not being changed stays byte-identical ---
+
+_W6 = """\
+MINIMUM_PINNED_VERSION = "1.1.1"
+
+DENYLISTED_VERSIONS: dict[str, str] = {}  # nothing denylisted yet
+
+
+class Pyrefly(TemplatedExternalTool):
+    options_scope = "pyrefly"
+
+    default_version = '1.2.1'  # bumped by hand
+    default_url_template = (
+        "https://github.com/facebook/pyrefly/releases/download/{version}/pyrefly-{platform}.tar.gz"
+    )
+    default_url_platform_mapping = {
+        "macos_arm64": "macos-arm64",
+        "linux_x86_64": "linux-x86_64-musl",
+    }
+    default_known_versions = [
+        # The current default.
+        "{p121_mac}",
+        '{p121_linux}',  # single-quoted on purpose
+        # Oldest supported.
+        "{p111_mac}",
+        "{p111_linux}",
+    ]
+"""
+
+
+def _w6_text() -> str:
+    p121_mac, p121_linux = _pins(["1.2.1"])
+    p111_mac, p111_linux = _pins(["1.1.1"])
+    return (
+        _W6.replace("{p121_mac}", p121_mac)
+        .replace("{p121_linux}", p121_linux)
+        .replace("{p111_mac}", p111_mac)
+        .replace("{p111_linux}", p111_linux)
+    )
+
+
+def test_write_inserts_missing_version_and_leaves_every_other_line(fake_github, tmp_path) -> None:
+    # The reviewer's W6 scenario: a comment between pins, a single-quoted pin, a trailing comment
+    # on `default_version`, and a missing in-range version (1.2.0).
+    original = _w6_text()
+    path = tmp_path / "subsystems.py"
+    path.write_text(original, encoding="utf-8")
+    assert gkv.main(["--subsystems", str(path), "--write"]) == 0
+
+    lines = original.split("\n")
+    at = lines.index("        # Oldest supported.")
+    expected = lines[:at] + [f'        "{pin}",' for pin in _pins(["1.2.0"])] + lines[at:]
+    assert path.read_text(encoding="utf-8") == "\n".join(expected)
+
+
+def test_write_with_version_changes_only_the_version_literal(fake_github, tmp_path) -> None:
+    original = _w6_text()
+    path = tmp_path / "subsystems.py"
+    path.write_text(original, encoding="utf-8")
+    assert gkv.main(["--subsystems", str(path), "--version", "1.9.0", "--write"]) == 0
+
+    lines = original.split("\n")
+    lines[lines.index("    default_version = '1.2.1'  # bumped by hand")] = (
+        "    default_version = '1.9.0'  # bumped by hand"
+    )
+    # 1.9.0 goes first (above the comment attached to the old first pin); 1.2.0 fills the gap.
+    top = lines.index("        # The current default.")
+    lines[top:top] = [f'        "{pin}",' for pin in _pins(["1.9.0"])]
+    gap = lines.index("        # Oldest supported.")
+    lines[gap:gap] = [f'        "{pin}",' for pin in _pins(["1.2.0"])]
+    assert path.read_text(encoding="utf-8") == "\n".join(lines)
+
+
+def test_write_appends_after_a_last_pin_without_trailing_comma(fake_github, tmp_path) -> None:
+    p121_mac, p121_linux = _pins(["1.2.1"])
+    original = _w6_text().replace(
+        f'        "{_pins(["1.1.1"])[1]}",\n', f'        "{_pins(["1.1.1"])[1]}"  # last\n'
+    )
+    original = original.replace(
+        'MINIMUM_PINNED_VERSION = "1.1.1"', 'MINIMUM_PINNED_VERSION = "1.1.0"'
+    )
+    path = tmp_path / "subsystems.py"
+    path.write_text(original, encoding="utf-8")
+    assert gkv.main(["--subsystems", str(path), "--write"]) == 0
+    text = path.read_text(encoding="utf-8")
+    # Only the comma is added to the old last line; 1.1.0 is appended after it.
+    assert f'        "{_pins(["1.1.1"])[1]}",  # last' in text
+    assert _config(path).known_versions == _pins(["1.2.1", "1.2.0", "1.1.1", "1.1.0"])
+
+
+def test_remove_deletes_only_pin_lines_and_adds_only_the_entry(tmp_path) -> None:
+    # In W6, 1.2.1 is the default and 1.1.1 the minimum; shift both so 1.2.1 can be removed.
+    original = _w6_text().replace("default_version = '1.2.1'", "default_version = '1.1.1'")
+    original = original.replace(
+        'MINIMUM_PINNED_VERSION = "1.1.1"', 'MINIMUM_PINNED_VERSION = "1.0.0"'
+    )
+    path = tmp_path / "subsystems.py"
+    path.write_text(original, encoding="utf-8")
+    assert _remove(path, "1.2.1", "bad build") == 0
+
+    lines = original.split("\n")
+    lines = [line for line in lines if "1.2.1|" not in line]
+    at = lines.index("DENYLISTED_VERSIONS: dict[str, str] = {}  # nothing denylisted yet")
+    lines[at : at + 1] = [
+        "DENYLISTED_VERSIONS: dict[str, str] = {",
+        '    "1.2.1": "bad build",',
+        "}  # nothing denylisted yet",
+    ]
+    assert path.read_text(encoding="utf-8") == "\n".join(lines)
+
+
+def test_remove_inserts_entry_newest_first_into_existing_denylist(tmp_path) -> None:
+    text = _SUBSYSTEMS.replace(
+        "DENYLISTED_VERSIONS: dict[str, str] = {}",
+        "DENYLISTED_VERSIONS: dict[str, str] = {\n"
+        "    # Newer problem.\n"
+        "    '1.10.0': 'bad',\n"
+        '    "1.0.5": "old"  # no trailing comma\n'
+        "}",
+    )
+    path = tmp_path / "subsystems.py"
+    path.write_text(text, encoding="utf-8")
+    assert _remove(path, "1.2.0", "mid") == 0
+    lines = path.read_text(encoding="utf-8").split("\n")
+    start = lines.index("DENYLISTED_VERSIONS: dict[str, str] = {")
+    assert lines[start : start + 5] == [
+        "DENYLISTED_VERSIONS: dict[str, str] = {",
+        "    # Newer problem.",
+        "    '1.10.0': 'bad',",
+        '    "1.2.0": "mid",',
+        '    "1.0.5": "old"  # no trailing comma',
+    ]
+    assert _config(path).denylist == {"1.10.0": "bad", "1.2.0": "mid", "1.0.5": "old"}
+
+
+def test_remove_refuses_already_denylisted(tmp_path) -> None:
+    path = _write_subsystems(tmp_path, _pins(["1.9.0"]), denylist={"1.2.1": "bad"})
+    with pytest.raises(SystemExit, match="already denylisted"):
+        _remove(path, "1.2.1", "again")
+
+
+# --- cut-off downloads ---
+
+
+class _CutOff(_Response):
+    def __init__(self, error: Exception) -> None:
+        super().__init__(b"")
+        self._error = error
+
+    def read(self, *args):  # type: ignore[override]
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        lambda: http.client.IncompleteRead(b"partial", 100),
+        lambda: ConnectionResetError("reset by peer"),
+    ],
+    ids=["IncompleteRead", "ConnectionResetError"],
+)
+def test_errors_while_reading_the_body_are_retried(monkeypatch, sleeps, make_error) -> None:
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append(1)
+        return _CutOff(make_error()) if len(attempts) < 3 else _Response(b"ok")
+
+    monkeypatch.setattr(gkv, "_urlopen", fake_urlopen)
+    assert gkv._get("https://github.com/x.tar.gz", None) == b"ok"
+    assert len(attempts) == 3
+    assert sleeps == [1, 2]
