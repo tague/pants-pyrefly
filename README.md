@@ -295,7 +295,12 @@ python3 $GEN --list-versions                  # supported versions as JSON (the 
   prefers (long reasons are split across adjacent string literals), so no `pants fmt` is needed.
 - `--write` and `--remove` edit `subsystems.py` line by line: they change only the
   `default_version` literal, insert or delete pin lines, and add a denylist entry. Every other line,
-  including comments and quoting, is left byte-identical.
+  including comments and quoting, is left byte-identical. They refuse layouts they can't edit
+  safely (for example two pins on one line) and leave the file untouched.
+
+Failures are reported as a single `error: ...` line (naming the file and line where relevant) with
+exit status 1, never a traceback. Set `GENERATE_KNOWN_VERSIONS_DEBUG=1` to see the traceback of an
+unexpected error.
 
 If Pyrefly withdraws a pinned release (deletes it, or re-labels it as a pre-release), `--check`
 fails, and the fix is `--remove <version> --reason "..."`.

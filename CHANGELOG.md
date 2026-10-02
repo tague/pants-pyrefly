@@ -54,8 +54,9 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   `--check-upstream` lists stable releases that are neither pinned nor denylisted. `--remove` is
   the only way to drop a version, and `--list-versions` prints the supported set. `--write` and
   `--remove` edit `subsystems.py` line by line, leaving comments and formatting untouched, and
-  denylist reasons are written as single-line UTF-8 literals in `ruff format`'s quote style. The
-  script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
+  denylist reasons are written as single-line UTF-8 literals in `ruff format`'s quote style.
+  Failures print a single `error: ...` line (with file and line where relevant), never a
+  traceback. The script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
   and retries transient network failures, including downloads cut off mid-body.
 
 ## 1.0.0 (2026-08-13)
