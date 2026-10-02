@@ -6,6 +6,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import stat
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest  # pants: no-infer-dep
 import toml  # pants: no-infer-dep
@@ -28,6 +32,8 @@ from pants_pyrefly.rules import (
     _remap_path,
     _remap_text,
 )
+from pants_pyrefly import subsystems
+from pants_pyrefly.subsystems import Pyrefly
 
 from pants.backend.python import target_types_rules
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
@@ -40,6 +46,7 @@ from pants.backend.python.util_rules import pex, pex_environment, pex_from_targe
 from pants.core.goals.check import CheckResult, CheckResults
 from pants.core.util_rules import config_files, external_tool, source_files
 from pants.engine.addresses import Address
+from pants.engine.internals.scheduler import ExecutionError
 from pants.engine.rules import QueryRule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
@@ -49,9 +56,38 @@ from pants.util.frozendict import FrozenDict
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
 
 
+def _remove_tree(path: Path) -> None:
+    """Remove `path`, including the read-only directories Pants makes for immutable inputs.
+
+    Pants also deletes finished sandboxes asynchronously, so entries may vanish mid-walk.
+    """
+
+    def on_error(function, failed_path, error: BaseException) -> None:
+        if isinstance(error, FileNotFoundError):
+            return
+        if isinstance(error, PermissionError):
+            parent = os.path.dirname(failed_path)
+            os.chmod(parent, stat.S_IRWXU)
+            if os.path.isdir(failed_path) and not os.path.islink(failed_path):
+                os.chmod(failed_path, stat.S_IRWXU)
+                shutil.rmtree(failed_path, onexc=on_error)
+            else:
+                function(failed_path)
+            return
+        raise error
+
+    shutil.rmtree(path, onexc=on_error)
+
+
 @pytest.fixture
-def rule_runner() -> PythonRuleRunner:
-    return PythonRuleRunner(
+def rule_runner(tmp_path: Path) -> Iterator[PythonRuleRunner]:
+    # The test sandbox gets no TMPDIR, so the inner Pants would default its execution root to
+    # /tmp and leave its read-only `immutable_inputs*` directories (the Pyrefly binary, ~20MB
+    # each) there. Keep everything it executes under pytest's tmp_path, and remove it afterwards.
+    exec_root = tmp_path / "pants-exec-root"
+    exec_root.mkdir()
+    yield PythonRuleRunner(
+        bootstrap_args=[f"--local-execution-root-dir={exec_root}"],
         rules=[
             *pyrefly_register_rules(),
             *target_types_rules.rules(),
@@ -70,6 +106,7 @@ def rule_runner() -> PythonRuleRunner:
             PythonRequirementTarget,
         ],
     )
+    _remove_tree(exec_root)
 
 
 def run_pyrefly(
@@ -381,7 +418,7 @@ def test_update_baseline_roundtrip(rule_runner: PythonRuleRunner) -> None:
     result = rule_runner.run_goal_rule(
         PyreflyUpdateBaseline,
         args=["--pyrefly-baseline=pyrefly-baseline.json", "src/project::"],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     baseline_path = os.path.join(rule_runner.build_root, "pyrefly-baseline.json")
@@ -425,7 +462,7 @@ def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
             "src/project/BUILD": "python_sources()",
         }
     )
-    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit={"PATH", "PYENV_ROOT", "HOME"})
+    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit=_ENV_INHERIT)
     assert result.exit_code == 0
     config_path = os.path.join(rule_runner.build_root, "pyrefly.toml")
     assert os.path.exists(config_path)
@@ -452,7 +489,7 @@ def test_lsp_config_dedupes_nested_source_roots(rule_runner: PythonRuleRunner) -
     result = rule_runner.run_goal_rule(
         PyreflyLspConfig,
         global_args=['--source-root-patterns=["/src", "/src/python"]'],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
@@ -476,7 +513,7 @@ def test_lsp_config_exclude_source_roots(rule_runner: PythonRuleRunner) -> None:
         PyreflyLspConfig,
         global_args=['--source-root-patterns=["/src", "/src/python"]'],
         args=["--pyrefly-exclude-source-roots=['src']"],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
@@ -547,6 +584,43 @@ def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> Non
     assert "src/b/g.py" in paths
 
 
+def test_baseline_gating_compact_multi_partition(rule_runner: PythonRuleRunner) -> None:
+    # A merged two-partition baseline in the compact format Pyrefly >= 1.3 writes (what
+    # `pyrefly-update-baseline` now produces): real repo paths, no `line`/`code`/`description`.
+    # `check` must remap each entry onto that partition's staged path and gate both partitions.
+    # (`test_baseline_gating` keeps covering the older full-entry format.)
+    def entry(path: str) -> dict:
+        return {
+            "column": 10,
+            "path": path,
+            "name": "bad-assignment",
+            "concise_description": "`Literal['bad']` is not assignable to `int`",
+            "severity": "error",
+        }
+
+    rule_runner.write_files(
+        {
+            "src/a/f.py": 'x: int = "bad"\n',
+            "src/a/BUILD": "python_sources(interpreter_constraints=['==3.11.*'])",
+            "src/b/g.py": 'y: int = "bad"\n',
+            "src/b/BUILD": "python_sources(interpreter_constraints=['==3.12.*'])",
+            "pyrefly.toml": 'preset = "legacy"\n',
+            "bl.json": json.dumps({"errors": [entry("src/a/f.py"), entry("src/b/g.py")]}),
+        }
+    )
+    targets = [
+        rule_runner.get_target(Address("src/a", relative_file_path="f.py")),
+        rule_runner.get_target(Address("src/b", relative_file_path="g.py")),
+    ]
+    ungated = run_pyrefly(rule_runner, targets)
+    assert len(ungated) == 2
+    assert all(result.exit_code == 1 for result in ungated)
+
+    gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
+    assert len(gated) == 2
+    assert all(result.exit_code == 0 for result in gated)
+
+
 def test_lsp_config_respects_pyproject(rule_runner: PythonRuleRunner) -> None:
     # If Pyrefly config already lives in `pyproject.toml [tool.pyrefly]`, the goal must NOT write a
     # shadowing `pyrefly.toml` (a standalone file takes precedence and would silently override it).
@@ -575,6 +649,63 @@ def test_only_filters_error_kinds(rule_runner: PythonRuleRunner) -> None:
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 1
     filtered = run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-only=bad-assignment"])
     assert filtered[0].exit_code == 0
+
+
+def _denylist(monkeypatch: pytest.MonkeyPatch, version: str, reason: str) -> list[str]:
+    """Denylist `version` as `--remove` would: drop its default pins. Returns the dropped pins."""
+    dropped = [kv for kv in Pyrefly.default_known_versions if kv.startswith(f"{version}|")]
+    assert dropped, f"{version} is not pinned"
+    monkeypatch.setattr(subsystems, "DENYLISTED_VERSIONS", {version: reason})
+    monkeypatch.setattr(
+        Pyrefly,
+        "default_known_versions",
+        [kv for kv in Pyrefly.default_known_versions if kv not in dropped],
+    )
+    return dropped
+
+
+def _clean_target(rule_runner: PythonRuleRunner) -> Target:
+    rule_runner.write_files(
+        {"src/project/f.py": "x: int = 1\n", "src/project/BUILD": "python_sources()"}
+    )
+    return rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["it miscompiles widgets", "crashes 💥 on startup"],
+    ids=["ascii", "non-bmp-emoji"],
+)
+def test_denylisted_version_fails_with_reason(
+    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    _denylist(monkeypatch, "1.2.1", reason)
+    tgt = _clean_target(rule_runner)
+    with pytest.raises(ExecutionError) as excinfo:
+        run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-version=1.2.1"])
+    message = str(excinfo.value)
+    assert "DenylistedPyreflyVersion" in message
+    # The exact wording, suggesting only the default; the reason (emoji included) is intact.
+    assert (
+        f"Pyrefly 1.2.1 is not supported by pants-pyrefly: {reason}. "
+        f"Set [pyrefly].version to a supported release ({Pyrefly.default_version})."
+    ) in message
+    assert "known_versions" not in message
+    assert "UnknownVersion" not in message
+
+
+def test_denylisted_version_allowed_with_user_pins(
+    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A user who deliberately supplies their own pins for a denylisted version is not blocked.
+    dropped = _denylist(monkeypatch, "1.2.1", "it miscompiles widgets")
+    tgt = _clean_target(rule_runner)
+    result = run_pyrefly(
+        rule_runner,
+        [tgt],
+        extra_args=["--pyrefly-version=1.2.1", f"--pyrefly-known-versions={json.dumps(dropped)}"],
+    )
+    assert result[0].exit_code == 0
 
 
 def test_tool_failure_distinct_from_type_errors(rule_runner: PythonRuleRunner) -> None:

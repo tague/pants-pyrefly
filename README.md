@@ -79,7 +79,7 @@ pants check path/to/dir::      # type-check a subtree
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
 | `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |
 | `exclude_source_roots` | `--pyrefly-exclude-source-roots` (advanced) | Source roots to omit from `--search-path`. Rarely needed — nested roots are deduped automatically (see below); use this only to force-drop a root the automatic logic keeps. |
-| `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. |
+| `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. Any [supported Pyrefly version](#supported-pyrefly-versions) needs only `version`. |
 
 Opt a target out of Pyrefly:
 
@@ -195,6 +195,37 @@ a small version-conditional import (the rules API changed at Pants 2.30, and aga
 by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33; in-between versions use the
 same modern API.
 
+## Supported Pyrefly versions
+
+The plugin ships checksums for a set of stable Pyrefly releases, from **1.1.1** (the plugin's
+first default) upward. Every version listed in its `default_known_versions` is pinned and tested,
+and any of them can be selected with `version` alone:
+
+```toml
+[pyrefly]
+version = "1.2.0"
+```
+
+Pre-releases (`X.Y.Z-dev.N`) are never pinned; to run one, set `known_versions` yourself. The policy:
+
+- New Pyrefly releases are considered as they come out, including backports to older lines.
+- A pinned version is removed only deliberately, with the reason recorded in the plugin's
+  `DENYLISTED_VERSIONS` (in `subsystems.py`) and a CHANGELOG note.
+- Versions older than 1.1.1 are added on request: [open an issue](https://github.com/tague/pants-pyrefly/issues).
+
+Selecting a denylisted version fails with the recorded reason rather than a generic
+`UnknownVersion`, and suggests the plugin's default:
+
+```
+DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.3.2).
+```
+
+To use a denylisted version anyway, supply your own `[pyrefly].known_versions` entry for it on
+your platform. That is a deliberate choice, and the plugin does not block it.
+
+Every supported version is exercised by the [compatibility suite](#pyrefly-compatibility-suite)
+before each release.
+
 ## Stability
 
 From 1.0.0 on, this project follows [Semantic Versioning](https://semver.org/). Covered by the
@@ -209,7 +240,8 @@ compatibility promise — a breaking change to any of these requires a major bum
 
 Not covered: the plugin's Python API (every module is an implementation detail — import nothing
 from `pants_pyrefly` directly), the default pinned Pyrefly version, the exact wording and layout of
-Pyrefly's own diagnostic output, and the sandbox staging mechanics described under
+Pyrefly's own diagnostic output, the contents and format of the baseline file (Pyrefly writes it,
+and its format can change between Pyrefly releases), and the sandbox staging mechanics described under
 [How import resolution works](#how-import-resolution-works). Dropping a Pants version that has
 reached end of life is a minor bump, not a major one.
 
@@ -228,22 +260,76 @@ pants package pants-plugins/pants_pyrefly:dist   # build the wheel + sdist into 
 
 ### Bumping the pinned Pyrefly version
 
-The four `default_known_versions` pins in `subsystems.py` (`<version>|<platform>|<sha256>|<size>`)
-are generated, not hand-edited. To move to a new Pyrefly release:
+The `default_known_versions` pins in `subsystems.py` (`<version>|<platform>|<sha256>|<size>`) are
+managed by `build-support/bin/generate_known_versions.py`, not hand-edited. They are ordered newest
+version first, platforms in a fixed order. The script reads everything it needs from
+`subsystems.py`: `MINIMUM_PINNED_VERSION` and `DENYLISTED_VERSIONS` (module-level constants, the
+single source of truth for each), plus the default, URL template, and platform mapping.
 
 ```bash
-python3 build-support/bin/generate_known_versions.py --version <new> --write
+GEN=build-support/bin/generate_known_versions.py
+python3 $GEN --check-upstream                 # stable releases not yet pinned (or denylisted)?
+python3 $GEN --version <new> --write          # move the default and add the missing pins
+python3 $GEN --write                          # add missing pins (e.g. a backport) only
+python3 $GEN --check                          # verify the shipped pins (what CI runs)
+python3 $GEN --remove <ver> --reason "<why>"  # drop a version's pins and denylist it
+python3 $GEN --list-versions                  # supported versions as JSON (the compat matrix)
 ```
 
-It reads the URL template and platform mapping straight from `subsystems.py`, fetches each asset's
-published `.sha256` sidecar and size from the GitHub release, and rewrites `default_version` + the
-pins. CI runs the same script with `--check` and fails if the committed pins drift from what the
-release actually publishes. (Set `GITHUB_TOKEN` to avoid GitHub API rate limits.)
+- `--write` only adds. It inserts pins for every stable release in `[minimum, default]` that isn't
+  already pinned or denylisted, and edits `default_version`. It never removes or rewrites an
+  existing pin: lowering the default keeps the higher pins, and a pin that disagrees with its
+  release is reported (exit 1), not overwritten.
+- `--check` verifies only what ships. Each pin's sha256 and size must match its release, the
+  default must be pinned, the order must be canonical, nothing may be older than the minimum, and
+  no denylisted version may be pinned or be the default. An unpinned upstream release, whether
+  newer than the default or an in-range backport, never fails `--check`, so a new Pyrefly release
+  never turns unrelated CI red.
+- `--check-upstream` lists every stable release at or above the minimum that is neither pinned
+  nor denylisted, and exits 1 if there are any.
+- `--remove` is the only removal path: it deletes the version's pins (if any) and records the
+  reason in `DENYLISTED_VERSIONS`, so `--write` never re-adds it and `--check-upstream` stops
+  reporting it. It also works for a never-pinned release you want to skip. It refuses the
+  default, and it refuses the minimum: raise `MINIMUM_PINNED_VERSION` deliberately instead. The
+  reason must be a single line; it is stored exactly as typed, in the quote style `ruff format`
+  prefers (long reasons are split across adjacent string literals), so no `pants fmt` is needed.
+- `--write` and `--remove` edit `subsystems.py` line by line: they change only the
+  `default_version` literal, insert or delete pin lines, and add a denylist entry. Every other line,
+  including comments and quoting, is left byte-identical. They refuse layouts they can't edit
+  safely (for example two pins on one line) and leave the file untouched.
+
+Failures are reported as a single `error: ...` line (naming the file and line where relevant) with
+exit status 1, never a traceback. Set `GENERATE_KNOWN_VERSIONS_DEBUG=1` to see the traceback of an
+unexpected error.
+
+If Pyrefly withdraws a pinned release (deletes it, or re-labels it as a pre-release), `--check`
+fails, and the fix is `--remove <version> --reason "..."`.
+
+The script fetches each asset's published `.sha256` sidecar (rejecting anything that isn't a
+64-character hex digest) and size from the GitHub release, retrying transient failures up to twice.
+Set `GITHUB_TOKEN` to avoid API rate limits; the token is only sent to `api.github.com`.
+
+### Pyrefly compatibility suite
+
+`build-support/ci/compat_test.sh <version>` builds a throwaway project that loads the plugin from
+source and drives real Pants runs with only `--pyrefly-version=<version>` set, so the shipped pins
+resolve the download. It checks that a clean file passes, that a missing import fails with
+`missing-import`, that `pyrefly-update-baseline` followed by a gated `check` passes, and that
+`pyrefly-suppress` followed by `check` passes. For every Pyrefly process it asserts, from the
+binary in that process's preserved sandbox, that `<version>` is what actually ran. Each Pants run
+uses an execution root inside the script's own work directory, so the script leaves nothing behind
+in `$TMPDIR`.
+
+The [compatibility workflow](.github/workflows/compat.yml) runs the script for every supported
+version (`--list-versions`), one job each. It runs on demand and as a required step of the release
+workflow, so if any supported version fails, nothing is published. It does not run on pull
+requests.
 
 ## Releasing
 
-Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) builds the wheel and
-publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
+Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) first runs the
+[Pyrefly compatibility suite](#pyrefly-compatibility-suite) for every supported version, then
+builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
 no API tokens). Configure a PyPI trusted publisher for this repo + the `release.yml` workflow first.
 
 ## License

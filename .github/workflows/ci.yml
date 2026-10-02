@@ -42,7 +42,7 @@ jobs:
       - name: Test
         run: "pants test ::"
 
-      - name: Check Pyrefly version pins are current
+      - name: Verify the shipped Pyrefly pins
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: "python3 build-support/bin/generate_known_versions.py --check"

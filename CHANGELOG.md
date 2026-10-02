@@ -3,6 +3,62 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Every stable Pyrefly from 1.1.1 up to the default is now pinned**: 1.1.1, 1.2.0, 1.2.1,
+  1.3.0, 1.3.1, and 1.3.2. Select any of them with just `[pyrefly].version = "..."`; no
+  `known_versions` override is needed. Existing `version = "1.1.1"` or `"1.2.0"` pins keep working
+  after upgrading the plugin. (The 1.0.0 entry's advice to pin `1.1.1` did not actually work on
+  1.0.0, which pinned only 1.2.0; it works as of this release.) See
+  [Supported Pyrefly versions](README.md#supported-pyrefly-versions) for the policy.
+- **The default pinned Pyrefly is now 1.3.2** (was 1.2.0). No plugin behavior changes, but the
+  newer Pyrefly changes what some builds report:
+  - **Renamed error kind.** The dataclass-field-assigned-an-inconsistent-data-descriptor error
+    that 1.2.0 reported as `bad-class-definition` is `bad-dataclass-descriptor` in 1.3. Anything
+    that names the old kind stops matching it under 1.3.x: 1.2.0-era baseline entries,
+    `# pyrefly: ignore[bad-class-definition]` comments (including ones `pants pyrefly-suppress`
+    wrote), `[pyrefly].only`, and `[errors]` settings in your Pyrefly config. Under the no-config
+    `basic` preset, 1.3.2 does not report this error at all.
+  - **New diagnostics** can surface errors 1.2.0 did not report, e.g. invalid literal regular
+    expressions (`regex`). Which ones fire depends on your config: `regex` is reported when a
+    Pyrefly config file is in effect, but not under the `basic` preset. Invalid `mock.patch`
+    targets are reported as warnings (`missing-attribute-patch-target`), which the default `error`
+    severity hides. Open-type match exhaustiveness (`non-exhaustive-match-open-type`) is off unless
+    you enable it in `[errors]`. The summary line now also counts hidden warnings
+    (`INFO 2 errors (… 1 warning not shown)`).
+  - **Compact baseline format.** `pants pyrefly-update-baseline` now writes entries with `path`,
+    `column`, `name`, `concise_description`, and `severity`, and drops `line`, `stop_line`,
+    `stop_column`, `code`, and `description`, so regenerating a committed baseline rewrites the
+    whole file once. 1.3.x still honors existing full-format baselines, except entries for the
+    renamed kind above. The change is one-way: a baseline written by 1.3.x does **not** suppress
+    anything under older Pyrefly, so regenerate it after pinning back.
+  - `# type: ignore[<code>]` comments carrying another tool's codes (e.g. a MyPy code) still
+    suppress everything on the line, as before. 1.3 adds `# type: ignore[pyrefly:<code>]` for
+    targeted suppression.
+- **Removed Pyrefly versions now fail with a reason.** A version is removed from the pins only
+  deliberately, with the reason recorded in `DENYLISTED_VERSIONS` (in `subsystems.py`) and a
+  CHANGELOG note. Selecting one with `[pyrefly].version` fails with
+  `DenylistedPyreflyVersion: Pyrefly X is not supported by pants-pyrefly: <reason>. Set
+  [pyrefly].version to a supported release (<default>).` instead of Pants's generic
+  `UnknownVersion`. Supplying your own `[pyrefly].known_versions` entry for it still works. The
+  denylist is empty in this release.
+- Releases are now gated on a Pyrefly compatibility suite
+  (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
+  version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
+  `pyrefly-suppress` with only `--pyrefly-version` set, and asserts that the requested Pyrefly
+  binary is the one that ran. The release workflow publishes nothing if any version fails.
+- Maintenance: `build-support/bin/generate_known_versions.py` now manages the pins.
+  `--write` only adds pins (stable releases up to the default, skipping pre-releases and denylisted
+  versions) and never rewrites existing ones. `--check` verifies only the shipped pins (checksums,
+  default pinned, order, nothing denylisted), so new upstream releases or backports never fail it.
+  `--check-upstream` lists stable releases that are neither pinned nor denylisted. `--remove` is
+  the only way to drop a version, and `--list-versions` prints the supported set. `--write` and
+  `--remove` edit `subsystems.py` line by line, leaving comments and formatting untouched, and
+  denylist reasons are written as single-line UTF-8 literals in `ruff format`'s quote style.
+  Failures print a single `error: ...` line (with file and line where relevant), never a
+  traceback. The script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
+  and retries transient network failures, including downloads cut off mid-body.
+
 ## 1.0.0 (2026-08-13)
 
 First stable release. No breaking changes from 0.5.0 — the goals, `[pyrefly]` options, and

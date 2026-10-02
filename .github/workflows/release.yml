@@ -5,8 +5,16 @@ on:
     tags: ["v*"]
 
 jobs:
+  # Every supported Pyrefly version must pass the compatibility suite before anything is published.
+  compat:
+    name: Pyrefly compatibility
+    uses: ./.github/workflows/compat.yml
+    permissions:
+      contents: read
+
   publish:
     name: Build and publish to PyPI
+    needs: compat
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
