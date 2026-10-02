@@ -20,13 +20,13 @@ from pants.option.option_types import (
     StrListOption,
     StrOption,
 )
-from pants.util.strutil import help_text, softwrap
+from pants.util.strutil import help_text
 
-# The oldest Pyrefly release the plugin ships pins for. `Pyrefly.default_known_versions` carries
-# every stable Pyrefly release from this version up to (at least) `Pyrefly.default_version`, minus
-# `DENYLISTED_VERSIONS`, so any of them can be selected with `[pyrefly].version` alone. 1.1.1 was
-# the plugin's first default. Older releases are added on request by lowering this; raising it is
-# a deliberate decision that needs a CHANGELOG note.
+# The oldest Pyrefly release the plugin ships pins for. Every version listed in
+# `Pyrefly.default_known_versions` is pinned and tested, none is older than this, and any of them
+# can be selected with `[pyrefly].version` alone. 1.1.1 was the plugin's first default. Older
+# releases are added on request by lowering this; raising it is a deliberate decision that needs a
+# CHANGELOG note.
 # `build-support/bin/generate_known_versions.py` reads this value; it is the single source of truth.
 MINIMUM_PINNED_VERSION = "1.1.1"
 
@@ -213,17 +213,9 @@ class Pyrefly(TemplatedExternalTool):
         # `known_versions`, which is a deliberate choice we don't block.
         reason = DENYLISTED_VERSIONS.get(self.version)
         if reason is not None and self.known_version(plat) is None:
-            supported = ", ".join(dict.fromkeys(kv.split("|", 1)[0] for kv in self.known_versions))
             raise DenylistedPyreflyVersion(
-                softwrap(
-                    f"""
-                    Pyrefly {self.version} is not supported by pants-pyrefly: {reason}
-
-                    Set `[pyrefly].version` to a supported release ({supported}), or, to use
-                    {self.version} anyway, add your own `[pyrefly].known_versions` entry for it on
-                    {plat.value}.
-                    """
-                )
+                f"Pyrefly {self.version} is not supported by pants-pyrefly: {reason}. "
+                f"Set [pyrefly].version to a supported release ({self.default_version})."
             )
         return super().get_request(plat)
 

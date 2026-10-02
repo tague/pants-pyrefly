@@ -637,16 +637,26 @@ def _clean_target(rule_runner: PythonRuleRunner) -> Target:
     return rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
 
 
+@pytest.mark.parametrize(
+    "reason",
+    ["it miscompiles widgets", "crashes 💥 on startup"],
+    ids=["ascii", "non-bmp-emoji"],
+)
 def test_denylisted_version_fails_with_reason(
-    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch
+    rule_runner: PythonRuleRunner, monkeypatch: pytest.MonkeyPatch, reason: str
 ) -> None:
-    _denylist(monkeypatch, "1.2.1", "it miscompiles widgets")
+    _denylist(monkeypatch, "1.2.1", reason)
     tgt = _clean_target(rule_runner)
     with pytest.raises(ExecutionError) as excinfo:
         run_pyrefly(rule_runner, [tgt], extra_args=["--pyrefly-version=1.2.1"])
     message = str(excinfo.value)
     assert "DenylistedPyreflyVersion" in message
-    assert "Pyrefly 1.2.1 is not supported by pants-pyrefly: it miscompiles widgets" in message
+    # The exact wording, suggesting only the default; the reason (emoji included) is intact.
+    assert (
+        f"Pyrefly 1.2.1 is not supported by pants-pyrefly: {reason}. "
+        f"Set [pyrefly].version to a supported release ({Pyrefly.default_version})."
+    ) in message
+    assert "known_versions" not in message
     assert "UnknownVersion" not in message
 
 
