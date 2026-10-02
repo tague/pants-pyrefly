@@ -19,7 +19,7 @@ python_distribution(
     # (pantsbuild/pants#20729). Pants provides itself at runtime and is no longer on PyPI, so
     # exclude it transitively: the published wheel must carry no `pantsbuild.pants` dependency.
     dependencies=[":pants_pyrefly", "!!3rdparty:pants#pantsbuild.pants"],
-    # Build under the dev resolve's interpreter (CPython 3.14 / Pants 2.32); `python_requires`
+    # Build under the dev resolve's interpreter (CPython 3.14 / Pants 2.33); `python_requires`
     # below sets the *wheel's* floor independently of this build-time constraint.
     interpreter_constraints=["==3.14.*"],
     provides=python_artifact(
@@ -29,7 +29,7 @@ python_distribution(
         long_description_content_type="text/markdown",
         license="Apache-2.0",
         # Pure-Python (`py3-none-any`), so it runs on the interpreter of any supported Pants:
-        # 2.27 (CPython 3.11) through 2.32 (CPython 3.14). Floor is decoupled from the build IC.
+        # 2.27 (CPython 3.11) through 2.33 (CPython 3.14). Floor is decoupled from the build IC.
         python_requires=">=3.11",
         classifiers=[
             "Intended Audience :: Developers",

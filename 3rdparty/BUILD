@@ -6,7 +6,8 @@
 pants_requirements(
     name="pants",
     resolve="pants-plugins",
-    # Target the whole 2.32 minor line rather than an exact patch, so the published wheel
-    # works against any Pants 2.32.x (the plugin API is stable within a minor version).
-    version_spec="==2.32.*",
+    # Target the whole 2.33 minor line (matching `pants_version`) rather than an exact patch, so
+    # the dev resolve accepts any Pants 2.33.x (the plugin API is stable within a minor version).
+    # The published wheel carries no `pantsbuild.pants` requirement (see pants_pyrefly:dist).
+    version_spec="==2.33.*",
 )

@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The compat project runs under this repo's Pants (2.32, CPython 3.14) and type-checks a
+      # The compat project runs under this repo's Pants (2.33, CPython 3.14) and type-checks a
       # sample project with interpreter constraints `>=3.11,<3.15`.
       - uses: actions/setup-python@v6
         with:
