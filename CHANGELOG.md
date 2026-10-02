@@ -35,11 +35,25 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   - `# type: ignore[<code>]` comments carrying another tool's codes (e.g. a MyPy code) still
     suppress everything on the line, as before. 1.3 adds `# type: ignore[pyrefly:<code>]` for
     targeted suppression.
-- `build-support/bin/generate_known_versions.py` now generates the whole pinned range from the
-  facebook/pyrefly releases, skipping pre-releases. `--check` fails if a pin in the range is wrong,
-  missing, or extra, and ignores releases newer than the default. The new `--check-upstream` mode
-  fails when a newer stable Pyrefly exists. CI also runs the integration tests on the minimum
-  pinned Pyrefly (`PYREFLY_TEST_VERSION=minimum`).
+- **Removed Pyrefly versions now fail with a reason.** A version is removed from the pins only
+  deliberately, with the reason recorded in `DENYLISTED_VERSIONS` (in `subsystems.py`) and a
+  CHANGELOG note. Selecting one with `[pyrefly].version` fails with
+  `DenylistedPyreflyVersion: Pyrefly X is not supported by pants-pyrefly: <reason>` and lists the
+  supported releases, instead of Pants's generic `UnknownVersion`. Supplying your own
+  `[pyrefly].known_versions` entry for it still works. The denylist is empty in this release.
+- Releases are now gated on a Pyrefly compatibility suite
+  (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
+  version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
+  `pyrefly-suppress` with only `--pyrefly-version` set, and asserts that the requested Pyrefly
+  binary is the one that ran. The release workflow publishes nothing if any version fails.
+- Maintenance: `build-support/bin/generate_known_versions.py` now manages the whole pinned range.
+  `--write` only adds pins (stable releases up to the default, skipping pre-releases and denylisted
+  versions) and never rewrites existing ones. `--check` verifies only the shipped pins (checksums,
+  default pinned, order, nothing denylisted), so new upstream releases or backports never fail it.
+  `--check-upstream` lists stable releases that are neither pinned nor denylisted. `--remove` is
+  the only way to drop a version, and `--list-versions` prints the supported set. The script now
+  sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars, and
+  retries transient network failures.
 
 ## 1.0.0 (2026-08-13)
 
