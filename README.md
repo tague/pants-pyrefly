@@ -79,7 +79,7 @@ pants check path/to/dir::      # type-check a subtree
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
 | `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |
 | `exclude_source_roots` | `--pyrefly-exclude-source-roots` (advanced) | Source roots to omit from `--search-path`. Rarely needed — nested roots are deduped automatically (see below); use this only to force-drop a root the automatic logic keeps. |
-| `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. |
+| `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. Any [supported Pyrefly version](#supported-pyrefly-versions) needs only `version`. |
 
 Opt a target out of Pyrefly:
 
@@ -195,6 +195,24 @@ a small version-conditional import (the rules API changed at Pants 2.30, and aga
 by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33; in-between versions use the
 same modern API.
 
+## Supported Pyrefly versions
+
+The plugin ships checksums for every stable Pyrefly release from **1.1.1** (the plugin's first
+default) up to its default, so any of them can be selected with `version` alone:
+
+```toml
+[pyrefly]
+version = "1.2.0"
+```
+
+Pre-releases (`X.Y.Z-dev.N`) are never pinned; to run one, set `known_versions` yourself. The policy:
+
+- Each new stable Pyrefly release is added to the pinned range when the default moves to it.
+- During plugin 1.x, no pinned version is removed.
+- Versions older than 1.1.1 are added on request: [open an issue](https://github.com/tague/pants-pyrefly/issues).
+
+CI runs the integration tests on both the default and the oldest pinned version.
+
 ## Stability
 
 From 1.0.0 on, this project follows [Semantic Versioning](https://semver.org/). Covered by the
@@ -209,7 +227,8 @@ compatibility promise — a breaking change to any of these requires a major bum
 
 Not covered: the plugin's Python API (every module is an implementation detail — import nothing
 from `pants_pyrefly` directly), the default pinned Pyrefly version, the exact wording and layout of
-Pyrefly's own diagnostic output, and the sandbox staging mechanics described under
+Pyrefly's own diagnostic output, the contents and format of the baseline file (Pyrefly writes it,
+and its format can change between Pyrefly releases), and the sandbox staging mechanics described under
 [How import resolution works](#how-import-resolution-works). Dropping a Pants version that has
 reached end of life is a minor bump, not a major one.
 
@@ -228,17 +247,31 @@ pants package pants-plugins/pants_pyrefly:dist   # build the wheel + sdist into 
 
 ### Bumping the pinned Pyrefly version
 
-The four `default_known_versions` pins in `subsystems.py` (`<version>|<platform>|<sha256>|<size>`)
-are generated, not hand-edited. To move to a new Pyrefly release:
+The `default_known_versions` pins in `subsystems.py` (`<version>|<platform>|<sha256>|<size>`) are
+generated, not hand-edited. They cover every stable Pyrefly release from `MINIMUM_PINNED_VERSION`
+(a module-level constant in `subsystems.py`, the single source of truth for the minimum) up to
+`default_version`, newest first. To move the default to a new Pyrefly release:
 
 ```bash
-python3 build-support/bin/generate_known_versions.py --version <new> --write
+GEN=build-support/bin/generate_known_versions.py
+python3 $GEN --check-upstream            # is a newer stable Pyrefly out?
+python3 $GEN --version <new> --write     # set default_version and regenerate every pin
+python3 $GEN --check                     # what CI runs
 ```
 
-It reads the URL template and platform mapping straight from `subsystems.py`, fetches each asset's
-published `.sha256` sidecar and size from the GitHub release, and rewrites `default_version` + the
-pins. CI runs the same script with `--check` and fails if the committed pins drift from what the
-release actually publishes. (Set `GITHUB_TOKEN` to avoid GitHub API rate limits.)
+The script reads the minimum, default, URL template, and platform mapping straight from
+`subsystems.py`, lists the facebook/pyrefly GitHub releases (skipping drafts and pre-releases), and
+fetches each asset's published `.sha256` sidecar and size. `--check` fails if any pin in the range
+is wrong, missing, or extra, but ignores releases newer than the default, so a new Pyrefly release
+never turns unrelated CI red. `--check-upstream` is the opt-in "a bump is available" signal. (Set
+`GITHUB_TOKEN` to avoid GitHub API rate limits.)
+
+To run the integration tests on a specific pinned Pyrefly, set `PYREFLY_TEST_VERSION` to a version
+or to `minimum`:
+
+```bash
+PYREFLY_TEST_VERSION=minimum pants test pants-plugins/pants_pyrefly:tests
+```
 
 ## Releasing
 

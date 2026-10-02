@@ -5,39 +5,41 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 
 ## Unreleased
 
+- **Every stable Pyrefly from 1.1.1 up to the default is now pinned**: 1.1.1, 1.2.0, 1.2.1,
+  1.3.0, 1.3.1, and 1.3.2. Select any of them with just `[pyrefly].version = "..."`; no
+  `known_versions` override is needed. Existing `version = "1.1.1"` or `"1.2.0"` pins keep working
+  after upgrading the plugin. (The 1.0.0 entry's advice to pin `1.1.1` did not actually work on
+  1.0.0, which pinned only 1.2.0; it works as of this release.) See
+  [Supported Pyrefly versions](README.md#supported-pyrefly-versions) for the policy.
 - **The default pinned Pyrefly is now 1.3.2** (was 1.2.0). No plugin behavior changes, but the
   newer Pyrefly changes what some builds report:
-  - New diagnostics can surface errors that 1.2.0 did not report, e.g. invalid literal regular
-    expressions (`regex`), descriptor-backed dataclass fields (`bad-dataclass-descriptor`), and
-    open-type match exhaustiveness (`non-exhaustive-match-open-type`). Which ones fire depends on
-    your config: `regex`, for example, is reported when a Pyrefly config file is in effect but not
-    under the no-config `basic` preset. Invalid `mock.patch`
-    targets are reported as warnings (`missing-attribute-patch-target`), which are hidden at the
-    default `error` severity. The summary line now also counts hidden warnings
+  - **Renamed error kind.** The dataclass-field-assigned-an-inconsistent-data-descriptor error
+    that 1.2.0 reported as `bad-class-definition` is `bad-dataclass-descriptor` in 1.3. Anything
+    that names the old kind stops matching it under 1.3.x: 1.2.0-era baseline entries,
+    `# pyrefly: ignore[bad-class-definition]` comments (including ones `pants pyrefly-suppress`
+    wrote), `[pyrefly].only`, and `[errors]` settings in your Pyrefly config. Under the no-config
+    `basic` preset, 1.3.2 does not report this error at all.
+  - **New diagnostics** can surface errors 1.2.0 did not report, e.g. invalid literal regular
+    expressions (`regex`). Which ones fire depends on your config: `regex` is reported when a
+    Pyrefly config file is in effect, but not under the `basic` preset. Invalid `mock.patch`
+    targets are reported as warnings (`missing-attribute-patch-target`), which the default `error`
+    severity hides. Open-type match exhaustiveness (`non-exhaustive-match-open-type`) is off unless
+    you enable it in `[errors]`. The summary line now also counts hidden warnings
     (`INFO 2 errors (… 1 warning not shown)`).
-  - `pants pyrefly-update-baseline` now writes a compact baseline format: entries keep `path`,
-    `column`, `name`, `concise_description`, and `severity`, and drop `line`, `stop_line`,
-    `stop_column`, `code`, and `description`. Regenerating a committed baseline therefore rewrites
-    the whole file once. Existing 1.2.0-format baselines are still honored by 1.3.2, but a baseline
-    written by 1.3.2 does **not** gate errors under 1.2.0. If you might pin back, keep the old
-    baseline until you're sure.
+  - **Compact baseline format.** `pants pyrefly-update-baseline` now writes entries with `path`,
+    `column`, `name`, `concise_description`, and `severity`, and drops `line`, `stop_line`,
+    `stop_column`, `code`, and `description`, so regenerating a committed baseline rewrites the
+    whole file once. 1.3.x still honors existing full-format baselines, except entries for the
+    renamed kind above. The change is one-way: a baseline written by 1.3.x does **not** suppress
+    anything under older Pyrefly, so regenerate it after pinning back.
   - `# type: ignore[<code>]` comments carrying another tool's codes (e.g. a MyPy code) still
     suppress everything on the line, as before. 1.3 adds `# type: ignore[pyrefly:<code>]` for
     targeted suppression.
-
-  To pin back, set both the version and its hashes (the plugin only ships pins for its default
-  version, so setting `version` alone fails with `UnknownVersion`):
-
-  ```toml
-  [pyrefly]
-  version = "1.2.0"
-  known_versions = [
-    "1.2.0|macos_arm64|312ab21e60fb4385a4cd5ef68bc70e2475d7b541a5cb5a30329db726b2b16e39|12988333",
-    "1.2.0|macos_x86_64|f1856386d167696af3fe05b5c2fbe807845e33da1024706cbe979c74ac7d7cdd|13661410",
-    "1.2.0|linux_arm64|5b27d702c8b8463090fe19ca4e2aa241bf8f2b09daf208feff051a90e4d12cee|13457814",
-    "1.2.0|linux_x86_64|18f509653a52fab1aab98d5b776486a4f278c04cc108fec8b52c131785f6d423|14080825",
-  ]
-  ```
+- `build-support/bin/generate_known_versions.py` now generates the whole pinned range from the
+  facebook/pyrefly releases, skipping pre-releases. `--check` fails if a pin in the range is wrong,
+  missing, or extra, and ignores releases newer than the default. The new `--check-upstream` mode
+  fails when a newer stable Pyrefly exists. CI also runs the integration tests on the minimum
+  pinned Pyrefly (`PYREFLY_TEST_VERSION=minimum`).
 
 ## 1.0.0 (2026-08-13)
 
