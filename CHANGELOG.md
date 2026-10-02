@@ -58,6 +58,10 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   Failures print a single `error: ...` line (with file and line where relevant), never a
   traceback. The script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
   and retries transient network failures, including downloads cut off mid-body.
+- Maintenance: the repo now develops, tests, and builds releases on Pants 2.33.1 (was 2.32.0). PR
+  CI smoke-tests the latest patch of a subset of the supported minors: 2.27.1, 2.31.0, 2.32.1, and
+  2.33.1. The supported Pants range (2.27–2.33) and the published wheel's requirements are
+  unchanged.
 
 ## 1.0.0 (2026-08-13)
 
