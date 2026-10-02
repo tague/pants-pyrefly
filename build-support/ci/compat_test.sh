@@ -15,6 +15,10 @@
 # and the script asserts that the binary in each preserved sandbox reports `pyrefly <version>`, so
 # it fails loudly if any other Pyrefly executed.
 #
+# Everything Pants executes lands in the script's own work directory: each run gets its own
+# `--local-execution-root-dir` there (sandboxes and `immutable_inputs*`), so cleanup is removing
+# that one directory and nothing is left in $TMPDIR.
+#
 # Usage: build-support/ci/compat_test.sh 1.2.0
 #   PANTS_VERSION                  overrides the Pants version (default: this repo's pants.toml).
 #   COMPAT_PANTS_PYREFLY_VERSION   self-test only: the version actually passed to Pants, while the
@@ -29,14 +33,13 @@ PANTS_VERSION="${PANTS_VERSION:-$(sed -n 's/^pants_version = "\(.*\)"$/\1/p' "${
 PANTS_PYREFLY_VERSION_ARG="${COMPAT_PANTS_PYREFLY_VERSION:-$PYREFLY_VERSION}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pyrefly-compat.XXXXXX")"
-KEPT="${WORK}.kept-sandboxes"
-: >"$KEPT"
+PROJECT="${WORK}/project"
 cleanup() {
-  # Remove every sandbox Pants preserved for us, then the project itself.
-  while IFS= read -r dir; do
-    [[ -n "$dir" ]] && rm -rf "$dir"
-  done <"$KEPT"
-  rm -rf "$WORK" "$KEPT"
+  local status=$?
+  # Pants makes immutable inputs (the Pyrefly binary) read-only; make them deletable first.
+  chmod -R u+w "$WORK" 2>/dev/null || true
+  rm -rf "$WORK"
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -47,11 +50,11 @@ fail() {
   exit 1
 }
 
-mkdir -p "$WORK/pants-plugins/pants_pyrefly" "$WORK/src"
+mkdir -p "$PROJECT/pants-plugins/pants_pyrefly" "$PROJECT/src"
 cp "$PLUGIN_SRC"/{__init__,subsystems,skip_field,rules,register,goals}.py \
-  "$WORK/pants-plugins/pants_pyrefly/"
+  "$PROJECT/pants-plugins/pants_pyrefly/"
 
-cat >"$WORK/pants.toml" <<EOF
+cat >"$PROJECT/pants.toml" <<EOF
 [GLOBAL]
 pants_version = "${PANTS_VERSION}"
 pythonpath = ["%(buildroot)s/pants-plugins"]
@@ -65,41 +68,43 @@ indexes = ["https://pypi.org/simple/"]
 EOF
 
 MISSING_MODULE="module_that_truly_does_not_exist_pyrefly_compat"
-printf 'def add(a: int, b: int) -> int:\n    return a + b\n' >"$WORK/src/good.py"
-printf 'import %s  # pants: no-infer-dep\n' "$MISSING_MODULE" >"$WORK/src/bad.py"
-echo 'python_sources()' >"$WORK/src/BUILD"
+printf 'def add(a: int, b: int) -> int:\n    return a + b\n' >"$PROJECT/src/good.py"
+printf 'import %s  # pants: no-infer-dep\n' "$MISSING_MODULE" >"$PROJECT/src/bad.py"
+echo 'python_sources()' >"$PROJECT/src/BUILD"
 
-cd "$WORK"
+cd "$PROJECT"
 
 OUT=""
-# Run Pants with the requested Pyrefly; capture combined output in $OUT and return Pants's status.
+RUN=0
+EXEC_ROOT=""
+# Run Pants with the requested Pyrefly in a fresh execution root under $WORK; capture combined
+# output in $OUT and return Pants's status.
 run_pants() {
   local status=0
+  RUN=$((RUN + 1))
+  EXEC_ROOT="${WORK}/exec-${RUN}"
+  mkdir -p "$EXEC_ROOT"
   OUT="$(pants --no-pantsd --no-local-cache --keep-sandboxes=always \
+    "--local-execution-root-dir=${EXEC_ROOT}" \
     "--pyrefly-version=${PANTS_PYREFLY_VERSION_ARG}" "$@" 2>&1)" ||
     status=$?
-  # Sandbox paths contain no spaces; descriptions do (and may contain " for ").
-  printf '%s\n' "$OUT" |
-    sed -n 's/.*Preserving local process execution dir \([^ ]*\) for .*/\1/p' >>"$KEPT"
   return "$status"
 }
 
-# Assert, from the sandboxes of the run that just finished, that every Pyrefly process executed
-# the requested version.
+# Assert, from the preserved sandboxes of the run that just finished, that every Pyrefly process
+# executed the requested version. Runs before cleanup: the binaries live under $EXEC_ROOT.
 assert_ran_requested_version() {
-  local sandboxes count=0 dir ran
-  sandboxes="$(printf '%s\n' "$OUT" |
-    sed -n 's/.*Preserving local process execution dir \([^ ]*\) for Run Pyrefly on .*/\1/p')"
-  while IFS= read -r dir; do
-    [[ -z "$dir" ]] && continue
-    grep -q '__pyrefly_tool/pyrefly' "$dir/__run.sh" ||
-      fail "sandbox $dir did not run __pyrefly_tool/pyrefly"
+  local count=0 run_sh dir ran
+  for run_sh in "$EXEC_ROOT"/pants-sandbox-*/__run.sh; do
+    [[ -f "$run_sh" ]] || continue
+    grep -q '__pyrefly_tool/pyrefly' "$run_sh" || continue
+    dir="$(dirname "$run_sh")"
     ran="$("$dir/__pyrefly_tool/pyrefly" --version 2>&1)" ||
       fail "could not run the Pyrefly binary preserved in $dir: $ran"
     [[ "$ran" == "pyrefly ${PYREFLY_VERSION}" ]] ||
       fail "expected 'pyrefly ${PYREFLY_VERSION}', but this run executed '${ran}' (sandbox $dir)"
     count=$((count + 1))
-  done <<<"$sandboxes"
+  done
   ((count > 0)) || fail "no Pyrefly process sandbox was preserved, so the version is unproven:
 $OUT"
   echo "   verified: ${count} Pyrefly process(es) ran 'pyrefly ${PYREFLY_VERSION}'"
