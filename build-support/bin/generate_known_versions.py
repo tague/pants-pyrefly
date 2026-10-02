@@ -83,6 +83,30 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 Version = tuple[int, int, int]
 
 
+class GeneratorError(Exception):
+    """An expected failure: reported as one `error: ...` line on stderr, exit status 1."""
+
+
+class ConfigError(GeneratorError):
+    """`subsystems.py` is missing, malformed, or uses a shape the script does not support."""
+
+
+class LayoutError(GeneratorError):
+    """The source layout is one the line-level editor does not handle."""
+
+
+class NetworkError(GeneratorError):
+    """A GitHub request failed (after retries, for transient failures)."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class EditCheckError(GeneratorError):
+    """An edit failed its pre-write check, so the file was not written."""
+
+
 def parse_stable_version(text: str) -> Version | None:
     """Return `(major, minor, patch)` for a stable `X.Y.Z` version, else None."""
     match = _STABLE_VERSION_RE.match(text.strip())
@@ -95,7 +119,7 @@ def parse_stable_version(text: str) -> Version | None:
 def _require_stable(text: str, what: str) -> Version:
     version = parse_stable_version(text)
     if version is None:
-        raise ValueError(f"{what} `{text}` is not a stable X.Y.Z version")
+        raise GeneratorError(f"{what} `{text}` is not a stable X.Y.Z version")
     return version
 
 
@@ -120,11 +144,14 @@ class PluginConfig:
     known_versions: list[str]
 
 
-def _find_class(tree: ast.Module, name: str) -> ast.ClassDef:
+DEFAULT_SOURCE = "subsystems.py"
+
+
+def _find_class(tree: ast.Module, name: str, source: str) -> ast.ClassDef:
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == name:
             return node
-    raise ValueError(f"class `{name}` not found")
+    raise ConfigError(f"{source}: class `{name}` not found")
 
 
 def _assignments(body: Iterable[ast.stmt]) -> dict[str, ast.Assign | ast.AnnAssign]:
@@ -140,14 +167,19 @@ def _assignments(body: Iterable[ast.stmt]) -> dict[str, ast.Assign | ast.AnnAssi
     return out
 
 
-def _locate(text: str) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
+def _locate(
+    text: str, source: str = DEFAULT_SOURCE
+) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
     """The value nodes of the module-level and `class Pyrefly` assignments we read or edit."""
-    tree = ast.parse(text)
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as error:
+        raise ConfigError(f"{source} line {error.lineno}: not valid Python ({error.msg})") from None
     module_assigns = _assignments(tree.body)
     for required in (MINIMUM_CONSTANT, DENYLIST_CONSTANT):
         if required not in module_assigns:
-            raise ValueError(f"module-level `{required}` not found in subsystems.py")
-    class_assigns = _assignments(_find_class(tree, "Pyrefly").body)
+            raise ConfigError(f"{source}: module-level `{required}` assignment not found")
+    class_assigns = _assignments(_find_class(tree, "Pyrefly", source).body)
     for required in (
         "default_version",
         "default_url_template",
@@ -155,7 +187,7 @@ def _locate(text: str) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
         "default_known_versions",
     ):
         if required not in class_assigns:
-            raise ValueError(f"`Pyrefly.{required}` not found in subsystems.py")
+            raise ConfigError(f"{source}: `Pyrefly.{required}` assignment not found")
 
     def values(assigns: dict[str, ast.Assign | ast.AnnAssign]) -> dict[str, ast.expr]:
         return {name: node.value for name, node in assigns.items() if node.value is not None}
@@ -163,18 +195,80 @@ def _locate(text: str) -> tuple[dict[str, ast.expr], dict[str, ast.expr]]:
     return values(module_assigns), values(class_assigns)
 
 
-def parse_plugin_config(text: str) -> PluginConfig:
-    module_values, class_values = _locate(text)
-    denylist = ast.literal_eval(module_values[DENYLIST_CONSTANT])
-    if not isinstance(denylist, dict):
-        raise ValueError(f"`{DENYLIST_CONSTANT}` must be a dict of version -> reason")
+_INVALID = object()
+
+
+def _literal(node: ast.expr, source: str, name: str, valid, shape: str):
+    """`ast.literal_eval(node)`, or a ConfigError naming the file, line, and expected shape."""
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        value = _INVALID
+    if value is _INVALID or not valid(node, value):
+        raise ConfigError(f"{source} line {node.lineno}: {name} must be {shape}")
+    return value
+
+
+def _is_str(node: ast.expr, value) -> bool:
+    return isinstance(value, str)
+
+
+def _is_str_dict(node: ast.expr, value) -> bool:
+    return (
+        isinstance(node, ast.Dict)
+        and isinstance(value, dict)
+        and all(isinstance(k, str) and isinstance(v, str) for k, v in value.items())
+    )
+
+
+_PIN_RE = re.compile(r"^[^|]+\|[^|]+\|[^|]+\|[^|]+$")
+
+
+def _is_pin_list(node: ast.expr, value) -> bool:
+    return (
+        isinstance(node, ast.List)
+        and isinstance(value, list)
+        and all(isinstance(item, str) and _PIN_RE.match(item) for item in value)
+    )
+
+
+def parse_plugin_config(text: str, source: str = DEFAULT_SOURCE) -> PluginConfig:
+    module_values, class_values = _locate(text, source)
     return PluginConfig(
-        minimum_version=ast.literal_eval(module_values[MINIMUM_CONSTANT]),
-        denylist=denylist,
-        version=ast.literal_eval(class_values["default_version"]),
-        url_template=ast.literal_eval(class_values["default_url_template"]),
-        platform_mapping=ast.literal_eval(class_values["default_url_platform_mapping"]),
-        known_versions=ast.literal_eval(class_values["default_known_versions"]),
+        minimum_version=_literal(
+            module_values[MINIMUM_CONSTANT], source, MINIMUM_CONSTANT, _is_str, "a string literal"
+        ),
+        denylist=_literal(
+            module_values[DENYLIST_CONSTANT],
+            source,
+            DENYLIST_CONSTANT,
+            _is_str_dict,
+            'a {...} dict literal of "version": "reason" strings',
+        ),
+        version=_literal(
+            class_values["default_version"], source, "default_version", _is_str, "a string literal"
+        ),
+        url_template=_literal(
+            class_values["default_url_template"],
+            source,
+            "default_url_template",
+            _is_str,
+            "a string literal",
+        ),
+        platform_mapping=_literal(
+            class_values["default_url_platform_mapping"],
+            source,
+            "default_url_platform_mapping",
+            _is_str_dict,
+            "a {...} dict literal of strings",
+        ),
+        known_versions=_literal(
+            class_values["default_known_versions"],
+            source,
+            "default_known_versions",
+            _is_pin_list,
+            'a [...] list literal of "<version>|<platform>|<sha256>|<size>" strings',
+        ),
     )
 
 
@@ -205,12 +299,12 @@ def py_literal(value: str) -> str:
 
 def validate_reason(reason: str) -> None:
     if not reason.strip():
-        raise ValueError("reason must not be empty")
+        raise GeneratorError("--reason must not be empty")
     for char in reason:
         if unicodedata.category(char) in _FORBIDDEN_CATEGORIES:
-            raise ValueError(
-                f"reason must be a single line: it contains {char!r}, a newline, tab, or other "
-                "control character"
+            raise GeneratorError(
+                f"--reason: reason must be a single line, but it contains {char!r} (a newline, "
+                "tab, or other control character)"
             )
 
 
@@ -236,7 +330,8 @@ def _split_reason(reason: str, indent: str) -> list[str]:
                 word = word[cut:]
     if current:
         pieces.append(current)
-    assert "".join(pieces) == reason
+    if "".join(pieces) != reason:
+        raise EditCheckError("internal error: the wrapped reason does not join back exactly")
     return pieces
 
 
@@ -273,10 +368,6 @@ def render_known_versions_block(pins: list[str]) -> list[str]:
 # ---
 # Editing subsystems.py in place: only the lines that must change are touched
 # ---
-
-
-class LayoutError(ValueError):
-    """The source layout is one the line-level editor does not handle."""
 
 
 def _split(text: str) -> list[str]:
@@ -325,8 +416,20 @@ def _ensure_trailing_comma(text: str, container: ast.expr) -> str:
     return "\n".join(lines)
 
 
+def _check_alone_on_lines(lines: list[str], node: ast.expr, label: str, source: str) -> None:
+    """Refuse if `node` shares a line with other code (only a comma/comment may follow it)."""
+    first, last = node.lineno - 1, (node.end_lineno or node.lineno) - 1
+    before = _byte_slice(lines[first], 0, node.col_offset)
+    after = _byte_slice(lines[last], node.end_col_offset or 0)
+    if before.strip() or not re.fullmatch(r"\s*,?\s*(#.*)?", after):
+        raise LayoutError(
+            f"{source} line {node.lineno}: {label} shares a line with other code; put one entry "
+            "per line (the layout `pants fmt` produces) or edit it by hand"
+        )
+
+
 def _check_one_item_per_line(
-    lines: list[str], container: ast.expr, items: list[ast.expr], what: str
+    lines: list[str], container: ast.expr, items: list[ast.expr], what: str, source: str
 ) -> None:
     open_index = container.lineno - 1
     close_index = (container.end_lineno or container.lineno) - 1
@@ -337,8 +440,9 @@ def _check_one_item_per_line(
     )
     if not ok:
         raise LayoutError(
-            f"`{what}` must put its opening and closing brackets on their own lines, one entry "
-            "per line (the layout `pants fmt` produces); edit it by hand or reformat it first"
+            f"{source} line {container.lineno}: `{what}` must put its opening and closing "
+            "brackets on their own lines, one entry per line (the layout `pants fmt` produces); "
+            "edit it by hand or reformat it first"
         )
 
 
@@ -357,9 +461,30 @@ def _expand_empty_inline(
     )
 
 
-def edit_default_version(text: str, version: str) -> str:
+def _known_versions_node(text: str, source: str) -> ast.List:
+    _, class_values = _locate(text, source)
+    node = class_values["default_known_versions"]
+    if not isinstance(node, ast.List):
+        raise LayoutError(f"{source} line {node.lineno}: default_known_versions must be a list")
+    return node
+
+
+def check_pins_layout(text: str, source: str = DEFAULT_SOURCE) -> list[tuple[str, ast.expr]]:
+    """Refuse pin layouts the line editor can't edit safely; returns (pin, node) pairs."""
+    node = _known_versions_node(text, source)
+    lines = _split(text)
+    if node.elts:
+        _check_one_item_per_line(lines, node, list(node.elts), "default_known_versions", source)
+    existing = [(ast.literal_eval(element), element) for element in node.elts]
+    for value, element in existing:
+        # Two pins on one line would make "insert a line before/after this pin" ambiguous.
+        _check_alone_on_lines(lines, element, f"the pin {value!r}", source)
+    return existing
+
+
+def edit_default_version(text: str, version: str, source: str = DEFAULT_SOURCE) -> str:
     """Replace only the version literal on the `default_version` line (keeping quotes/comments)."""
-    _, class_values = _locate(text)
+    _, class_values = _locate(text, source)
     node = class_values["default_version"]
     lines = _split(text)
     index = node.lineno - 1
@@ -374,13 +499,16 @@ def edit_default_version(text: str, version: str) -> str:
     return "\n".join(lines)
 
 
-def edit_insert_pins(text: str, new_pins: list[str], platform_mapping: dict[str, str]) -> str:
+def edit_insert_pins(
+    text: str,
+    new_pins: list[str],
+    platform_mapping: dict[str, str],
+    source: str = DEFAULT_SOURCE,
+) -> str:
     """Insert each new pin line at its canonical position; every other line is left as-is."""
     if not new_pins:
         return text
-    _, class_values = _locate(text)
-    node = class_values["default_known_versions"]
-    assert isinstance(node, ast.List)
+    node = _known_versions_node(text, source)
     lines = _split(text)
     ordered = canonical_order(new_pins, platform_mapping)
 
@@ -392,8 +520,7 @@ def edit_insert_pins(text: str, new_pins: list[str], platform_mapping: dict[str,
         close_index = (node.end_lineno or node.lineno) - 1
         return "\n".join(lines[:close_index] + rendered + lines[close_index:])
 
-    _check_one_item_per_line(lines, node, list(node.elts), "default_known_versions")
-    existing = [(ast.literal_eval(element), element) for element in node.elts]
+    existing = check_pins_layout(text, source)
     indent = _leading_ws(lines[node.elts[0].lineno - 1])
     open_index = node.lineno - 1
     close_index = (node.end_lineno or node.lineno) - 1
@@ -419,32 +546,31 @@ def edit_insert_pins(text: str, new_pins: list[str], platform_mapping: dict[str,
     return "\n".join(lines)
 
 
-def edit_remove_pins(text: str, version: str) -> str:
+def edit_remove_pins(text: str, version: str, source: str = DEFAULT_SOURCE) -> str:
     """Delete only the lines holding `version`'s pins."""
-    _, class_values = _locate(text)
-    node = class_values["default_known_versions"]
-    assert isinstance(node, ast.List)
+    node = _known_versions_node(text, source)
     lines = _split(text)
     doomed: set[int] = set()
     for element in node.elts:
         value = ast.literal_eval(element)
         if not isinstance(value, str) or pin_version(value) != version:
             continue
+        _check_alone_on_lines(lines, element, f"the pin {value!r}", source)
         first, last = element.lineno - 1, (element.end_lineno or element.lineno) - 1
-        before = _byte_slice(lines[first], 0, element.col_offset)
-        after = _byte_slice(lines[last], element.end_col_offset or 0)
-        if before.strip() or not re.fullmatch(r"\s*,?\s*(#.*)?", after):
-            raise LayoutError(f"the pin {value!r} shares a line with other code; remove it by hand")
         doomed.update(range(first, last + 1))
     return "\n".join(line for index, line in enumerate(lines) if index not in doomed)
 
 
-def edit_add_denylist_entry(text: str, version: str, reason: str) -> str:
+def edit_add_denylist_entry(
+    text: str, version: str, reason: str, source: str = DEFAULT_SOURCE
+) -> str:
     """Add one `DENYLISTED_VERSIONS` entry (newest first); existing lines are left as-is."""
-    module_values, _ = _locate(text)
+    module_values, _ = _locate(text, source)
     node = module_values[DENYLIST_CONSTANT]
     if not isinstance(node, ast.Dict):
-        raise LayoutError(f"`{DENYLIST_CONSTANT}` must be a dict literal")
+        raise LayoutError(
+            f"{source} line {node.lineno}: {DENYLIST_CONSTANT} must be a {{...}} dict literal"
+        )
     lines = _split(text)
     open_index = node.lineno - 1
     close_index = (node.end_lineno or node.lineno) - 1
@@ -457,7 +583,14 @@ def edit_add_denylist_entry(text: str, version: str, reason: str) -> str:
         return "\n".join(lines[:close_index] + rendered + lines[close_index:])
 
     keys = [key for key in node.keys if key is not None]
-    _check_one_item_per_line(lines, node, [*keys, *node.values], DENYLIST_CONSTANT)
+    _check_one_item_per_line(lines, node, [*keys, *node.values], DENYLIST_CONSTANT, source)
+    for key in keys:
+        if _byte_slice(lines[key.lineno - 1], 0, key.col_offset).strip():
+            raise LayoutError(
+                f"{source} line {key.lineno}: the {DENYLIST_CONSTANT} entry "
+                f"{ast.literal_eval(key)!r} shares a line with other code; put one entry per line "
+                "(the layout `pants fmt` produces) or edit it by hand"
+            )
     indent = _leading_ws(lines[keys[0].lineno - 1])
     rendered = render_denylist_entry(version, reason, indent)
     new_key = _version_key(version)
@@ -540,13 +673,18 @@ def _get(url: str, token: str | None) -> bytes:
         try:
             with _urlopen(_request(url, token), timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 return response.read()
-        except Exception as error:
-            if not _is_transient(error) or attempt == MAX_ATTEMPTS:
-                raise
+        except (OSError, http.client.HTTPException) as error:
+            # urllib.error.URLError/HTTPError, socket timeouts, and connection resets are OSErrors;
+            # a body cut short is an http.client.HTTPException. Anything else is a bug: let it out.
+            transient = _is_transient(error)
+            if not transient or attempt == MAX_ATTEMPTS:
+                status = error.code if isinstance(error, urllib.error.HTTPError) else None
+                tries = f" after {attempt} attempts" if transient else ""
+                raise NetworkError(f"GET {url} failed{tries}: {error}", status=status) from error
             delay = BACKOFF_SECONDS[attempt - 1]
             print(f"warning: {url}: {error}; retrying in {delay}s", file=sys.stderr)
             _sleep(delay)
-    raise AssertionError("unreachable")
+    raise NetworkError(f"GET {url} failed")
 
 
 def list_stable_releases(token: str | None) -> dict[str, dict]:
@@ -557,7 +695,13 @@ def list_stable_releases(token: str | None) -> dict[str, dict]:
     releases: dict[str, dict] = {}
     page = 1
     while True:
-        batch = json.loads(_get(RELEASES_API.format(page=page), token))
+        url = RELEASES_API.format(page=page)
+        try:
+            batch = json.loads(_get(url, token))
+        except ValueError:
+            raise NetworkError(f"GET {url} returned a response that is not JSON") from None
+        if not isinstance(batch, list):
+            raise NetworkError(f"GET {url} returned an unexpected response (not a release list)")
         if not batch:
             return releases
         for release in batch:
@@ -579,7 +723,7 @@ def parse_sha256_sidecar(content: bytes, asset: str) -> str:
     tokens = content.split()
     digest = tokens[0].decode(errors="replace").lower() if tokens else ""
     if not _SHA256_RE.match(digest):
-        raise ValueError(
+        raise GeneratorError(
             f"`{asset}.sha256` does not start with a 64-character hex sha256 (got {digest[:80]!r})"
         )
     return digest
@@ -597,12 +741,12 @@ def pins_for_release(config: PluginConfig, release: dict, token: str | None) -> 
     for pants_platform, url_platform in config.platform_mapping.items():
         filename = _asset_filename(config.url_template, version, url_platform)
         if filename not in downloads:
-            raise ValueError(f"release {version} has no asset named `{filename}`")
+            raise GeneratorError(f"release {version} has no asset named `{filename}`")
         asset_url = downloads[filename]
         try:
             sidecar = _get(f"{asset_url}.sha256", token)
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
+        except NetworkError as error:
+            if error.status != 404:
                 raise
             # No published sidecar: download the asset and compute both locally.
             blob = _get(asset_url, token)
@@ -694,11 +838,16 @@ def supported_versions(config: PluginConfig) -> list[str]:
     return [v for v in pinned_versions(config.known_versions) if v not in config.denylist]
 
 
+def _error(message: str) -> None:
+    """Print one `error: ...` line to stderr (any embedded newlines are folded)."""
+    print("error: " + " ".join(str(message).splitlines()), file=sys.stderr)
+
+
 def run_check(config: PluginConfig, token: str | None) -> int:
     releases = list_stable_releases(token)
     problems, _ = verify_pins(config, releases, token)
     if problems:
-        print("Pyrefly pins are invalid:", file=sys.stderr)
+        _error(f"Pyrefly pins are invalid ({len(problems)} problem(s)):")
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 1
@@ -718,36 +867,64 @@ def run_check_upstream(config: PluginConfig, token: str | None) -> int:
     default = _version_key(config.version)
     newer = [v for v in missing if _version_key(v) > default]
     in_range = [v for v in missing if _version_key(v) <= default]
-    print("Stable Pyrefly releases that are neither pinned nor denylisted:", file=sys.stderr)
+    _error("stable Pyrefly releases are neither pinned nor denylisted:")
     if newer:
         print(f"  newer than the default {config.version}: {', '.join(newer)}", file=sys.stderr)
     if in_range:
         print(f"  at or below the default (backports): {', '.join(in_range)}", file=sys.stderr)
     print(
-        "Pin with `--write` (plus `--version X` to move the default), or deliberately skip one "
+        "  Pin with `--write` (plus `--version X` to move the default), or deliberately skip one "
         'with `--remove X --reason "..."`.',
         file=sys.stderr,
     )
     return 1
 
 
-def _write_checked(path: Path, text: str, check) -> None:
-    """Write `text` only if it still parses and `check(config)` holds for the result."""
-    check(parse_plugin_config(text))
-    path.write_text(text, encoding="utf-8")
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ConfigError(f"cannot read {path}: {error.strerror or error}") from None
+    except UnicodeDecodeError as error:
+        raise ConfigError(f"{path} is not valid UTF-8 ({error.reason})") from None
+
+
+def _require(condition: bool, path: Path, problem: str) -> None:
+    """An explicit pre-write check (never an `assert`, which `python -O` would strip)."""
+    if not condition:
+        raise EditCheckError(
+            f"refusing to write {path}: {problem}; the file was not changed (this is a bug in the "
+            "generator, please report it)"
+        )
+
+
+def _write(path: Path, text: str) -> None:
+    try:
+        path.write_text(text, encoding="utf-8")
+    except OSError as error:
+        raise GeneratorError(f"cannot write {path}: {error.strerror or error}") from None
 
 
 def run_write(path: Path, config: PluginConfig, version: str, token: str | None) -> int:
+    source = str(path)
     target = _require_stable(version, "--version")
     if target < _version_key(config.minimum_version):
-        raise SystemExit(
-            f"error: {version} is older than MINIMUM_PINNED_VERSION {config.minimum_version}"
+        raise GeneratorError(
+            f"{version} is older than MINIMUM_PINNED_VERSION {config.minimum_version}"
         )
     if version in config.denylist:
-        raise SystemExit(f"error: {version} is denylisted: {config.denylist[version]}")
+        raise GeneratorError(f"{version} is denylisted: {config.denylist[version]}")
+    # Refuse layouts the line editor can't handle before doing anything else, even when there
+    # turns out to be nothing to add.
+    check_pins_layout(_read(path), source)
+    if config.known_versions != canonical_order(config.known_versions, config.platform_mapping):
+        raise GeneratorError(
+            f"{source}: default_known_versions is not in canonical order (newest version first, "
+            "platforms in default_url_platform_mapping order); fix the order by hand, then rerun"
+        )
     releases = list_stable_releases(token)
     if version not in releases:
-        raise SystemExit(f"error: {version} is not a published stable Pyrefly release")
+        raise GeneratorError(f"{version} is not a published stable Pyrefly release")
 
     # Existing pins are kept verbatim; disagreements are reported, never overwritten.
     problems, _ = verify_pins(config, releases, token)
@@ -770,24 +947,36 @@ def run_write(path: Path, config: PluginConfig, version: str, token: str | None)
 
     # Edit lines in place: only the `default_version` literal changes, and new pin lines are
     # inserted. Every other line stays byte-identical.
-    text = path.read_text(encoding="utf-8")
+    text = _read(path)
     if version != config.version:
-        text = edit_default_version(text, version)
-    text = edit_insert_pins(text, new_pins, config.platform_mapping)
+        text = edit_default_version(text, version, source)
+    text = edit_insert_pins(text, new_pins, config.platform_mapping, source)
 
-    def check(updated: PluginConfig) -> None:
-        # The default moved, exactly the new pins were added, and existing pins kept their order.
-        assert updated.version == version
-        assert sorted(updated.known_versions) == sorted([*config.known_versions, *new_pins])
-        kept = [pin for pin in updated.known_versions if pin not in new_pins]
-        assert kept == config.known_versions
-
-    _write_checked(path, text, check)
+    # Pre-write check: the default moved, exactly the new pins were added, existing pins kept
+    # their order, and the result is in canonical order.
+    updated = parse_plugin_config(text, source)
+    _require(updated.version == version, path, f"default_version is not {version}")
+    _require(
+        sorted(updated.known_versions) == sorted([*config.known_versions, *new_pins]),
+        path,
+        "the pins are not exactly the existing pins plus the new ones",
+    )
+    _require(
+        [pin for pin in updated.known_versions if pin not in new_pins] == config.known_versions,
+        path,
+        "existing pins were reordered",
+    )
+    _require(
+        updated.known_versions == canonical_order(updated.known_versions, config.platform_mapping),
+        path,
+        "the pins would not be in canonical order",
+    )
+    _write(path, text)
 
     added = ", ".join(to_add) if to_add else "none"
     print(f"Set default_version = {version}; added pins for: {added}.")
     if mismatches:
-        print("Existing pins that disagree with the release were NOT changed:", file=sys.stderr)
+        _error("existing pins disagree with the release and were NOT changed:")
         for problem in mismatches:
             print(f"  - {problem}", file=sys.stderr)
         return 1
@@ -795,42 +984,51 @@ def run_write(path: Path, config: PluginConfig, version: str, token: str | None)
 
 
 def run_remove(path: Path, config: PluginConfig, version: str, reason: str) -> int:
+    source = str(path)
     _require_stable(version, "--remove")
-    try:
-        validate_reason(reason)
-    except ValueError as error:
-        raise SystemExit(f"error: --reason: {error}") from None
+    validate_reason(reason)
     if version == config.version:
-        raise SystemExit(
-            f"error: refusing to remove the default version {version}; move the default first "
+        raise GeneratorError(
+            f"refusing to remove the default version {version}; move the default first "
             "(`--version X --write`)"
         )
     if version == config.minimum_version:
-        raise SystemExit(
-            f"error: refusing to remove MINIMUM_PINNED_VERSION {version}; raise "
+        raise GeneratorError(
+            f"refusing to remove MINIMUM_PINNED_VERSION {version}; raise "
             "MINIMUM_PINNED_VERSION in subsystems.py deliberately instead (with a CHANGELOG note)"
         )
     if version in config.denylist:
-        raise SystemExit(f"error: {version} is already denylisted: {config.denylist[version]}")
+        raise GeneratorError(f"{version} is already denylisted: {config.denylist[version]}")
 
     # Edit lines in place: delete only this version's pin lines and add only the new entry.
-    text = path.read_text(encoding="utf-8")
-    text = edit_remove_pins(text, version)
-    text = edit_add_denylist_entry(text, version, reason)
+    text = _read(path)
+    text = edit_remove_pins(text, version, source)
+    text = edit_add_denylist_entry(text, version, reason, source)
     remaining = [pin for pin in config.known_versions if pin_version(pin) != version]
 
-    def check(updated: PluginConfig) -> None:
-        assert updated.known_versions == remaining
-        assert updated.denylist == {**config.denylist, version: reason}
-
-    _write_checked(path, text, check)
+    updated = parse_plugin_config(text, source)
+    _require(updated.known_versions == remaining, path, f"pins other than {version}'s changed")
+    _require(
+        updated.denylist == {**config.denylist, version: reason},
+        path,
+        "the denylist is not exactly the old one plus the new entry",
+    )
+    _require(updated.version == config.version, path, "default_version changed")
+    _write(path, text)
     removed = len(config.known_versions) - len(remaining)
     print(f"Removed {removed} pin(s) for {version} and denylisted it: {reason}")
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
+class _ArgumentParser(argparse.ArgumentParser):
+    """Report bad command-line input as a single `error:` line (exit 1), not usage + exit 2."""
+
+    def error(self, message: str):  # type: ignore[override]
+        raise GeneratorError(f"{message} (see --help)")
+
+
+def _run(argv: list[str] | None) -> int:
+    parser = _ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
@@ -870,21 +1068,45 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--reason is only valid with --remove")
     if args.version is not None and not args.write:
         parser.error("--version is only valid with --write")
+    if args.remove is not None and args.reason is None:
+        parser.error("--remove requires --reason")
 
-    config = parse_plugin_config(args.subsystems.read_text(encoding="utf-8"))
+    config = parse_plugin_config(_read(args.subsystems), str(args.subsystems))
 
     if args.list_versions:
         print(json.dumps(supported_versions(config)))
         return 0
     if args.remove is not None:
-        if args.reason is None:
-            parser.error("--remove requires --reason")
         return run_remove(args.subsystems, config, args.remove, args.reason)
     if args.check:
         return run_check(config, args.token)
     if args.check_upstream:
         return run_check_upstream(config, args.token)
     return run_write(args.subsystems, config, args.version or config.version, args.token)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the CLI. Expected failures print one `error: ...` line and return 1, never a traceback.
+
+    Anything else is a bug: it is reported the same way (set GENERATE_KNOWN_VERSIONS_DEBUG=1 to
+    get the traceback instead).
+    """
+    try:
+        return _run(argv)
+    except GeneratorError as error:
+        _error(str(error))
+        return 1
+    except KeyboardInterrupt:
+        _error("interrupted")
+        return 130
+    except Exception as error:
+        if os.environ.get("GENERATE_KNOWN_VERSIONS_DEBUG"):
+            raise
+        _error(
+            f"unexpected {type(error).__name__}: {error} (this is a bug in the generator; set "
+            "GENERATE_KNOWN_VERSIONS_DEBUG=1 for a traceback)"
+        )
+        return 1
 
 
 if __name__ == "__main__":

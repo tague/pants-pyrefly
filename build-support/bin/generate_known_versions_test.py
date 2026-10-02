@@ -7,6 +7,8 @@ import http.client
 import io
 import json
 import socket
+import subprocess
+import sys
 import urllib.error
 from pathlib import Path
 
@@ -141,6 +143,22 @@ def _config(path: Path) -> gkv.PluginConfig:
 _ALL_IN_RANGE = ["1.9.0", "1.2.1", "1.2.0", "1.1.1"]
 
 
+def _assert_clean_error(capsys, code: int, fragment: str) -> str:
+    """Exit 1 with exactly one `error: ...` line on stderr, containing `fragment`, no traceback."""
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err, err
+    errors = [line for line in err.splitlines() if line.startswith("error: ")]
+    assert len(errors) == 1, err
+    assert fragment in errors[0], errors[0]
+    # Nothing but the error line and (for network retries) `warning:` lines.
+    others = [
+        line for line in err.splitlines() if line and not line.startswith(("error: ", "warning: "))
+    ]
+    assert others == [], err
+    return errors[0]
+
+
 # --- parsing ---
 
 
@@ -159,7 +177,7 @@ def test_parse_plugin_config() -> None:
 @pytest.mark.parametrize("constant", ["MINIMUM_PINNED_VERSION", "DENYLISTED_VERSIONS"])
 def test_parse_requires_module_constants(constant: str) -> None:
     text = "\n".join(line for line in _SUBSYSTEMS.splitlines() if not line.startswith(constant))
-    with pytest.raises(ValueError, match=constant):
+    with pytest.raises(gkv.ConfigError, match=constant):
         gkv.parse_plugin_config(text)
 
 
@@ -253,10 +271,10 @@ def test_write_never_readds_denylisted(fake_github, tmp_path) -> None:
     assert _config(path).known_versions == _pins(["1.9.0", "1.2.0", "1.1.1"])
 
 
-def test_write_refuses_denylisted_default(fake_github, tmp_path) -> None:
+def test_write_refuses_denylisted_default(fake_github, tmp_path, capsys) -> None:
     path = _write_subsystems(tmp_path, _pins(["1.9.0"]), denylist={"1.11.0": "broken"})
-    with pytest.raises(SystemExit, match="denylisted"):
-        gkv.main(["--subsystems", str(path), "--version", "1.11.0", "--write"])
+    code = gkv.main(["--subsystems", str(path), "--version", "1.11.0", "--write"])
+    _assert_clean_error(capsys, code, "1.11.0 is denylisted: broken")
 
 
 # --- --remove ---
@@ -284,17 +302,17 @@ def test_remove_can_denylist_a_never_pinned_version(tmp_path) -> None:
     ("version", "message"),
     [("1.9.0", "default version"), ("1.1.1", "raise MINIMUM_PINNED_VERSION")],
 )
-def test_remove_refuses_default_and_minimum(tmp_path, version, message) -> None:
+def test_remove_refuses_default_and_minimum(tmp_path, capsys, version, message) -> None:
     path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
-    with pytest.raises(SystemExit, match=message):
-        gkv.main(["--subsystems", str(path), "--remove", version, "--reason", "x"])
+    code = gkv.main(["--subsystems", str(path), "--remove", version, "--reason", "x"])
+    _assert_clean_error(capsys, code, message)
     assert _config(path).known_versions == _pins(_ALL_IN_RANGE)
 
 
-def test_remove_requires_reason(tmp_path) -> None:
+def test_remove_requires_reason(tmp_path, capsys) -> None:
     path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
-    with pytest.raises(SystemExit):
-        gkv.main(["--subsystems", str(path), "--remove", "1.2.1"])
+    code = gkv.main(["--subsystems", str(path), "--remove", "1.2.1"])
+    _assert_clean_error(capsys, code, "--remove requires --reason")
 
 
 # --- --check (only what ships) ---
@@ -445,8 +463,9 @@ def test_retries_give_up_after_three_attempts(monkeypatch, sleeps) -> None:
         raise _http_error(request.full_url, 502)
 
     monkeypatch.setattr(gkv, "_urlopen", fake_urlopen)
-    with pytest.raises(urllib.error.HTTPError):
+    with pytest.raises(gkv.NetworkError, match="after 3 attempts") as excinfo:
         gkv._get("https://api.github.com/x", None)
+    assert excinfo.value.status == 502
     assert len(attempts) == 3
     assert sleeps == [1, 2]
 
@@ -460,8 +479,9 @@ def test_client_errors_are_not_retried(monkeypatch, sleeps, code) -> None:
         raise _http_error(request.full_url, code)
 
     monkeypatch.setattr(gkv, "_urlopen", fake_urlopen)
-    with pytest.raises(urllib.error.HTTPError):
+    with pytest.raises(gkv.NetworkError) as excinfo:
         gkv._get("https://api.github.com/x", None)
+    assert excinfo.value.status == code
     assert len(attempts) == 1
     assert sleeps == []
 
@@ -471,7 +491,7 @@ def test_client_errors_are_not_retried(monkeypatch, sleeps, code) -> None:
     [b"", b"deadbeef  pyrefly.tar.gz\n", b"z" * 64 + b"  x\n", b"a" * 63, b"a" * 65 + b"  x\n"],
 )
 def test_sidecar_must_be_a_64_hex_digest(content: bytes) -> None:
-    with pytest.raises(ValueError, match="64-character hex sha256"):
+    with pytest.raises(gkv.GeneratorError, match="64-character hex sha256"):
         gkv.parse_sha256_sidecar(content, "pyrefly-macos-arm64.tar.gz")
 
 
@@ -483,7 +503,7 @@ def test_sidecar_accepts_digest_with_filename() -> None:
 def test_bad_sidecar_fails_pin_generation(monkeypatch, tmp_path) -> None:
     release = _release("1.9.0", False, False)
     monkeypatch.setattr(gkv, "_get", lambda url, token: b"not-a-digest  file\n")
-    with pytest.raises(ValueError, match="64-character hex sha256"):
+    with pytest.raises(gkv.GeneratorError, match="64-character hex sha256"):
         gkv.pins_for_release(gkv.parse_plugin_config(_SUBSYSTEMS), release, None)
 
 
@@ -526,11 +546,10 @@ def test_reason_literal_uses_ruff_preferred_quotes(tmp_path, reason, literal) ->
 
 
 @pytest.mark.parametrize("bad", ["two\nlines", "tab\there", "nul\x00", "cr\rhere", "sep x"])
-def test_reason_must_be_a_single_line(tmp_path, bad) -> None:
+def test_reason_must_be_a_single_line(tmp_path, capsys, bad) -> None:
     path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
     before = path.read_text(encoding="utf-8")
-    with pytest.raises(SystemExit, match="reason must be a single line"):
-        _remove(path, "1.2.1", bad)
+    _assert_clean_error(capsys, _remove(path, "1.2.1", bad), "reason must be a single line")
     assert path.read_text(encoding="utf-8") == before
 
 
@@ -683,10 +702,9 @@ def test_remove_inserts_entry_newest_first_into_existing_denylist(tmp_path) -> N
     assert _config(path).denylist == {"1.10.0": "bad", "1.2.0": "mid", "1.0.5": "old"}
 
 
-def test_remove_refuses_already_denylisted(tmp_path) -> None:
+def test_remove_refuses_already_denylisted(tmp_path, capsys) -> None:
     path = _write_subsystems(tmp_path, _pins(["1.9.0"]), denylist={"1.2.1": "bad"})
-    with pytest.raises(SystemExit, match="already denylisted"):
-        _remove(path, "1.2.1", "again")
+    _assert_clean_error(capsys, _remove(path, "1.2.1", "again"), "already denylisted")
 
 
 # --- cut-off downloads ---
@@ -720,3 +738,170 @@ def test_errors_while_reading_the_body_are_retried(monkeypatch, sleeps, make_err
     assert gkv._get("https://github.com/x.tar.gz", None) == b"ok"
     assert len(attempts) == 3
     assert sleeps == [1, 2]
+
+
+# --- shared-line layouts ---
+
+
+def test_write_refuses_pins_sharing_a_line(fake_github, tmp_path, capsys) -> None:
+    # The reviewer's repro: two pins on one line, with a pin missing between them in canonical
+    # order. Inserting "before/after a pin" is ambiguous there, so --write must refuse.
+    p190 = _pins(["1.9.0"])
+    p121 = _pins(["1.2.1"])
+    p120 = _pins(["1.2.0"])
+    known = [p190[0], p190[1], p121[0], p121[1], p120[1]]  # 1.2.0|macos_arm64 missing
+    path = _write_subsystems(tmp_path, known)
+    text = path.read_text(encoding="utf-8").replace(
+        f'"{p121[1]}",\n        "{p120[1]}",', f'"{p121[1]}", "{p120[1]}",'
+    )
+    path.write_text(text, encoding="utf-8")
+    line = _assert_clean_error(
+        capsys,
+        gkv.main(["--subsystems", str(path), "--write"]),
+        "shares a line with other code",
+    )
+    assert f"{path} line " in line
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_write_refuses_pins_sharing_a_line_even_with_nothing_to_add(
+    fake_github, tmp_path, capsys
+) -> None:
+    known = _pins(_ALL_IN_RANGE)
+    path = _write_subsystems(tmp_path, known)
+    text = path.read_text(encoding="utf-8").replace(
+        f'"{known[3]}",\n        "{known[4]}",', f'"{known[3]}", "{known[4]}",'
+    )
+    path.write_text(text, encoding="utf-8")
+    code = gkv.main(["--subsystems", str(path), "--write"])
+    _assert_clean_error(capsys, code, "shares a line with other code")
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_write_refuses_non_canonical_existing_pins(fake_github, tmp_path, capsys) -> None:
+    path = _write_subsystems(tmp_path, _pins(["1.1.1", "1.9.0"]))
+    before = path.read_text(encoding="utf-8")
+    code = gkv.main(["--subsystems", str(path), "--write"])
+    _assert_clean_error(capsys, code, "not in canonical order")
+    assert path.read_text(encoding="utf-8") == before
+
+
+# --- clean errors, never tracebacks ---
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "fragment"),
+    [
+        (
+            "DENYLISTED_VERSIONS: dict[str, str] = {}",
+            "DENYLISTED_VERSIONS = dict()",
+            'line 3: DENYLISTED_VERSIONS must be a {...} dict literal of "version": "reason"',
+        ),
+        (
+            "DENYLISTED_VERSIONS: dict[str, str] = {}",
+            'DENYLISTED_VERSIONS: dict[str, str] = {"1.2.0": 7}',
+            "line 3: DENYLISTED_VERSIONS must be a {...} dict literal",
+        ),
+        ('MINIMUM_PINNED_VERSION = "1.1.1"', "MINIMUM_PINNED_VERSION = 1.1", "line 1: MINIMUM"),
+        ('default_version = "1.9.0"', "default_version = VERSION", "line 9: default_version"),
+        ('"1.9.0|macos_arm64|aaaa|111",', '"garbage",', "default_known_versions must be"),
+        ("    skip = SkipOption", "    skip = = SkipOption", "not valid Python"),
+        ("class Pyrefly(", "class NotPyrefly(", "class `Pyrefly` not found"),
+    ],
+)
+def test_malformed_subsystems_is_a_clean_error(tmp_path, capsys, old, new, fragment) -> None:
+    assert old in _SUBSYSTEMS
+    path = tmp_path / "subsystems.py"
+    path.write_text(_SUBSYSTEMS.replace(old, new), encoding="utf-8")
+    line = _assert_clean_error(
+        capsys, gkv.main(["--subsystems", str(path), "--list-versions"]), fragment
+    )
+    assert str(path) in line
+
+
+@pytest.mark.parametrize(
+    ("argv", "fragment"),
+    [
+        ([], "one of the arguments"),
+        (["--check", "--write"], "not allowed with argument"),
+        (["--check", "--bogus"], "unrecognized arguments: --bogus"),
+        (["--check", "--reason", "x"], "--reason is only valid with --remove"),
+        (["--check", "--version", "1.2.0"], "--version is only valid with --write"),
+        (["--remove", "1.x", "--reason", "x"], "--remove `1.x` is not a stable X.Y.Z version"),
+    ],
+)
+def test_bad_command_line_is_a_clean_error(tmp_path, capsys, argv, fragment) -> None:
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    _assert_clean_error(capsys, gkv.main(["--subsystems", str(path), *argv]), fragment)
+
+
+def test_missing_file_is_a_clean_error(tmp_path, capsys) -> None:
+    missing = tmp_path / "nope.py"
+    code = gkv.main(["--subsystems", str(missing), "--list-versions"])
+    _assert_clean_error(capsys, code, f"cannot read {missing}")
+
+
+def test_network_failure_after_retries_is_a_clean_error(
+    monkeypatch, sleeps, tmp_path, capsys
+) -> None:
+    def fake_urlopen(request, timeout):
+        raise _http_error(request.full_url, 503)
+
+    monkeypatch.setattr(gkv, "_urlopen", fake_urlopen)
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    line = _assert_clean_error(
+        capsys, gkv.main(["--subsystems", str(path), "--check"]), "failed after 3 attempts"
+    )
+    assert "api.github.com" in line
+
+
+def test_non_json_api_response_is_a_clean_error(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(gkv, "_get", lambda url, token: b"<html>rate limited</html>")
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    code = gkv.main(["--subsystems", str(path), "--check-upstream"])
+    _assert_clean_error(capsys, code, "not JSON")
+
+
+def test_unexpected_bug_is_reported_without_traceback(monkeypatch, tmp_path, capsys) -> None:
+    def boom(config, token):
+        raise KeyError("tag_name")
+
+    monkeypatch.setattr(gkv, "run_check", boom)
+    monkeypatch.delenv("GENERATE_KNOWN_VERSIONS_DEBUG", raising=False)
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    code = gkv.main(["--subsystems", str(path), "--check"])
+    _assert_clean_error(capsys, code, "unexpected KeyError: 'tag_name' (this is a bug")
+
+
+# --- the pre-write check is real code, not an assert ---
+
+
+def test_pre_write_check_raises_edit_check_error(monkeypatch, tmp_path) -> None:
+    # Simulate an editor bug: the pins are not actually removed.
+    monkeypatch.setattr(gkv, "edit_remove_pins", lambda text, version, source="": text)
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(gkv.EditCheckError, match="refusing to write"):
+        gkv.run_remove(path, _config(path), "1.2.1", "bad")
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_pre_write_check_survives_python_optimize(tmp_path) -> None:
+    # Under `python -O` asserts are stripped; the check must still block the write.
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
+    before = path.read_text(encoding="utf-8")
+    script = f"""
+import sys
+sys.path.insert(0, {str(Path(gkv.__file__).parent)!r})
+assert False, "not reached under -O"
+import generate_known_versions as gkv
+gkv.edit_remove_pins = lambda text, version, source="": text
+sys.exit(gkv.main(["--subsystems", {str(path)!r}, "--remove", "1.2.1", "--reason", "bad"]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 1, result.stderr
+    assert "error: refusing to write" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert path.read_text(encoding="utf-8") == before
