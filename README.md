@@ -9,8 +9,9 @@ that imports resolve correctly.
 
 ## Requirements
 
-- **Pants 2.27–2.33.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
-  (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.33.
+- **Pants 2.27–2.33.** A single codebase uses the call-by-name rules API on every supported
+  version and detects the two differences introduced at Pants 2.30 at runtime; verified on every
+  minor from 2.27 to 2.33.
 - The **published wheel** is pure-Python — `Requires-Python: >=3.11`, with **no `pantsbuild.pants`
   dependency** (Pants provides itself at runtime) — so a single release installs into any supported
   Pants, from 2.27 (CPython 3.11) through 2.33 (CPython 3.14).
@@ -190,11 +191,14 @@ or interpreter constraints, each partition's config is printed under its own hea
 | `0.2.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.1.0` | `2.27`–`2.32` | `1.1.1` |
 
-The plugin supports both the legacy (`Get`/`MultiGet`) and modern (call-by-name) rules APIs through
-a small version-conditional import (the rules API changed at Pants 2.30, and again removed `Get`
-by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33 on every pull request, and the
-pre-release [compatibility suite](#pyrefly-compatibility-suite) runs on every minor from 2.27 to
-2.33.
+The plugin uses the call-by-name rules API, which every supported version provides; it never uses
+`Get`/`MultiGet` (removed by Pants 2.32). Two things differ at Pants 2.30, and the plugin detects
+which side it is on at runtime: the coarsened-targets rule was renamed (`coarsened_targets` on
+2.27–2.29, `resolve_coarsened_targets` on 2.30+), and the check goal's
+`default_process_cache_scope`, which honors `--force`, only exists on 2.30+ (older versions cache
+successful runs). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33 on every pull request,
+and the pre-release [compatibility suite](#pyrefly-compatibility-suite) runs on every minor from
+2.27 to 2.33.
 
 ## Supported Pyrefly versions
 
