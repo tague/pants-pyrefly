@@ -22,6 +22,7 @@ Usage (run directly; pure stdlib, no Pants required):
                                           #   denylisted (exit 1 if any)
     python3 $GEN --remove 1.2.2 --reason "miscompiles X"  # drop pins + denylist (only removal path)
     python3 $GEN --list-versions          # JSON list of supported versions, for a CI matrix
+    python3 $GEN --default-version        # the default version, for a CI job
 
 `--write` and `--remove` edit `subsystems.py` line by line: `--write` changes only the
 `default_version` literal and inserts new pin lines, and `--remove` deletes only that version's pin
@@ -1060,6 +1061,11 @@ def _run(argv: list[str] | None) -> int:
         action="store_true",
         help="Print the supported versions (pinned minus denylisted) as a JSON list.",
     )
+    mode.add_argument(
+        "--default-version",
+        action="store_true",
+        help="Print the plugin's default Pyrefly version.",
+    )
     parser.add_argument("--reason", default=None, help="Why --remove is denylisting VERSION.")
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"), help="GitHub API token.")
     args = parser.parse_args(argv)
@@ -1075,6 +1081,9 @@ def _run(argv: list[str] | None) -> int:
 
     if args.list_versions:
         print(json.dumps(supported_versions(config)))
+        return 0
+    if args.default_version:
+        print(config.version)
         return 0
     if args.remove is not None:
         return run_remove(args.subsystems, config, args.remove, args.reason)

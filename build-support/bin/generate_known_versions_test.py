@@ -392,6 +392,15 @@ def test_list_versions_is_pinned_minus_denylisted(tmp_path, capsys) -> None:
     assert json.loads(capsys.readouterr().out) == _ALL_IN_RANGE
 
 
+# --- --default-version ---
+
+
+def test_default_version_prints_the_default(tmp_path, capsys) -> None:
+    path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE), default="1.2.1")
+    assert gkv.main(["--subsystems", str(path), "--default-version"]) == 0
+    assert capsys.readouterr().out == "1.2.1\n"
+
+
 # --- network robustness ---
 
 

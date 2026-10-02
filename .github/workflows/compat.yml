@@ -1,8 +1,12 @@
 name: Pyrefly compatibility
 
-# Runs build-support/ci/compat_test.sh against every supported Pyrefly version (pinned minus
-# denylisted, from subsystems.py). It gates releases: release.yml calls this workflow and the PyPI
-# publish job needs it. It also runs on demand. Deliberately not run on pull requests or on a
+# Runs build-support/ci/compat_test.sh in two matrices:
+#   - `compat`: every supported Pyrefly version (pinned minus denylisted, from subsystems.py) on
+#     this repo's Pants;
+#   - `compat-pants`: the default Pyrefly version on every supported Pants minor (latest stable
+#     patch of each).
+# It gates releases: release.yml calls this workflow and the PyPI publish job needs it, so every job
+# in both matrices must pass. It also runs on demand. Deliberately not run on pull requests or on a
 # schedule.
 on:
   workflow_dispatch:
@@ -17,15 +21,19 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.list.outputs.versions }}
+      default: ${{ steps.list.outputs.default }}
     steps:
       - uses: actions/checkout@v5
 
       - id: list
-        name: Read the supported versions from subsystems.py
+        name: Read the supported and default versions from subsystems.py
         run: |
           versions="$(python3 build-support/bin/generate_known_versions.py --list-versions)"
+          default="$(python3 build-support/bin/generate_known_versions.py --default-version)"
           echo "Supported Pyrefly versions: ${versions}"
+          echo "Default Pyrefly version: ${default}"
           echo "versions=${versions}" >> "$GITHUB_OUTPUT"
+          echo "default=${default}" >> "$GITHUB_OUTPUT"
 
   compat:
     name: compat (Pyrefly ${{ matrix.pyrefly-version }})
@@ -51,3 +59,35 @@ jobs:
 
       - name: Compatibility test
         run: bash build-support/ci/compat_test.sh "${{ matrix.pyrefly-version }}"
+
+  compat-pants:
+    name: compat (Pants ${{ matrix.pants-version }}, Pyrefly ${{ needs.versions.outputs.default }})
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Latest stable patch of every supported Pants minor (2.27-2.33).
+        pants-version: ["2.27.1", "2.28.1", "2.29.1", "2.30.2", "2.31.0", "2.32.1", "2.33.1"]
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pants brings its own interpreter (CPython 3.11 through 2.31, 3.14 from 2.32). The compat
+      # project's interpreter constraints are `>=3.11,<3.15`; install both ends of that range plus
+      # 3.12, as the smoke matrix in ci.yml does.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: |
+            3.11
+            3.12
+            3.14
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: compat-pants-${{ matrix.pants-version }}-v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      - name: Compatibility test
+        env:
+          PANTS_VERSION: ${{ matrix.pants-version }}
+        run: bash build-support/ci/compat_test.sh "${{ needs.versions.outputs.default }}"

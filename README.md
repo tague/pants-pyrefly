@@ -192,8 +192,9 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 The plugin supports both the legacy (`Get`/`MultiGet`) and modern (call-by-name) rules APIs through
 a small version-conditional import (the rules API changed at Pants 2.30, and again removed `Get`
-by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33; in-between versions use the
-same modern API.
+by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33 on every pull request, and the
+pre-release [compatibility suite](#pyrefly-compatibility-suite) runs on every minor from 2.27 to
+2.33.
 
 ## Supported Pyrefly versions
 
@@ -274,6 +275,7 @@ python3 $GEN --write                          # add missing pins (e.g. a backpor
 python3 $GEN --check                          # verify the shipped pins (what CI runs)
 python3 $GEN --remove <ver> --reason "<why>"  # drop a version's pins and denylist it
 python3 $GEN --list-versions                  # supported versions as JSON (the compat matrix)
+python3 $GEN --default-version                # the default version
 ```
 
 - `--write` only adds. It inserts pins for every stable release in `[minimum, default]` that isn't
@@ -320,16 +322,23 @@ binary in that process's preserved sandbox, that `<version>` is what actually ra
 uses an execution root inside the script's own work directory, so the script leaves nothing behind
 in `$TMPDIR`.
 
-The [compatibility workflow](.github/workflows/compat.yml) runs the script for every supported
-version (`--list-versions`), one job each. It runs on demand and as a required step of the release
-workflow, so if any supported version fails, nothing is published. It does not run on pull
-requests.
+The script runs under this repo's Pants by default; set `PANTS_VERSION` to run it under another.
+
+The [compatibility workflow](.github/workflows/compat.yml) runs the script in two matrices, one job
+each:
+
+- every supported Pyrefly version (`--list-versions`) on this repo's Pants;
+- the default Pyrefly version (`--default-version`) on the latest stable patch of every supported
+  Pants minor: 2.27.1, 2.28.1, 2.29.1, 2.30.2, 2.31.0, 2.32.1, and 2.33.1.
+
+It runs on demand and as a required step of the release workflow, so if any job fails, nothing is
+published. It does not run on pull requests.
 
 ## Releasing
 
 Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) first runs the
-[Pyrefly compatibility suite](#pyrefly-compatibility-suite) for every supported version, then
-builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
+[Pyrefly compatibility suite](#pyrefly-compatibility-suite) (every supported Pyrefly version, and
+every supported Pants minor), then builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
 no API tokens). Configure a PyPI trusted publisher for this repo + the `release.yml` workflow first.
 
 ## License
