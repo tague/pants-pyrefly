@@ -1,12 +1,14 @@
 name: Pyrefly compatibility
 
-# Runs build-support/ci/compat_test.sh in two matrices:
+# Runs build-support/ci/compat_test.sh in two matrices and one extra job:
 #   - `compat`: every supported Pyrefly version (pinned minus denylisted, from subsystems.py) on
 #     this repo's Pants;
 #   - `compat-pants`: the default Pyrefly version on every supported Pants minor (latest stable
-#     patch of each).
-# It gates releases: release.yml calls this workflow and the PyPI publish job needs it, so every job
-# in both matrices must pass. It also runs on demand. Deliberately not run on pull requests or on a
+#     patch of each);
+#   - `compat-python39`: the default Pyrefly version on this repo's Pants, checking a project
+#     constrained to `CPython==3.9.*`.
+# It gates releases: release.yml calls this workflow and the PyPI publish job needs it, so every
+# job must pass. It also runs on demand. Deliberately not run on pull requests or on a
 # schedule.
 on:
   workflow_dispatch:
@@ -90,4 +92,35 @@ jobs:
       - name: Compatibility test
         env:
           PANTS_VERSION: ${{ matrix.pants-version }}
+        run: bash build-support/ci/compat_test.sh "${{ needs.versions.outputs.default }}"
+
+  compat-python39:
+    name: compat (Python 3.9 project, Pyrefly ${{ needs.versions.outputs.default }})
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The plugin passes `--python-version` from the minimum of the project's interpreter
+      # constraints, and builds the venv behind `--python-interpreter-path` with an interpreter
+      # that satisfies them, so a `CPython==3.9.*` project needs a real Python 3.9. Pants itself
+      # runs on its own bundled interpreter.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: |
+            3.9
+            3.14
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: compat-python39-v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      # Besides the usual steps, the script asserts every Pyrefly process got
+      # `--python-version=3.9` and a 3.9-or-newer interpreter, and that a `match` statement
+      # (Python 3.10+) is rejected with `invalid-syntax`.
+      - name: Compatibility test (Python 3.9 project)
+        env:
+          COMPAT_INTERPRETER_CONSTRAINTS: "CPython==3.9.*"
+          COMPAT_PYTHON_VERSION: "3.9"
         run: bash build-support/ci/compat_test.sh "${{ needs.versions.outputs.default }}"

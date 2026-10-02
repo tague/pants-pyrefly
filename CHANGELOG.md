@@ -47,8 +47,9 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
   `pyrefly-suppress` with only `--pyrefly-version` set, and asserts that the requested Pyrefly
   binary is the one that ran. It also runs the default Pyrefly on the latest patch of every
-  supported Pants minor: 2.27.1, 2.28.1, 2.29.1, 2.30.2, 2.31.0, 2.32.1, and 2.33.1. The release
-  workflow publishes nothing if any of these jobs fails.
+  supported Pants minor: 2.27.1, 2.28.1, 2.29.1, 2.30.2, 2.31.0, 2.32.1, and 2.33.1, and against
+  a `CPython==3.9.*` project, asserting that Pyrefly checks it as Python 3.9. The release workflow
+  publishes nothing if any of these jobs fails.
 - Maintenance: `build-support/bin/generate_known_versions.py` now manages the pins.
   `--write` only adds pins (stable releases up to the default, skipping pre-releases and denylisted
   versions) and never rewrites existing ones. `--check` verifies only the shipped pins (checksums,

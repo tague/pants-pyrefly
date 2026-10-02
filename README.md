@@ -322,18 +322,24 @@ source and drives real Pants runs with only `--pyrefly-version=<version>` set, s
 resolve the download. It checks that a clean file passes, that a missing import fails with
 `missing-import`, that `pyrefly-update-baseline` followed by a gated `check` passes, and that
 `pyrefly-suppress` followed by `check` passes. For every Pyrefly process it asserts, from the
-binary in that process's preserved sandbox, that `<version>` is what actually ran. Each Pants run
-uses an execution root inside the script's own work directory, so the script leaves nothing behind
-in `$TMPDIR`.
+binary in that process's preserved sandbox, that `<version>` is what actually ran, and that the
+process got `--python-version` set to the project's minimum Python. Each Pants run uses an
+execution root inside the script's own work directory, so the script leaves nothing behind in
+`$TMPDIR`.
 
-The script runs under this repo's Pants by default; set `PANTS_VERSION` to run it under another.
+The script runs under this repo's Pants with a `CPython>=3.11,<3.15` project by default. Set
+`PANTS_VERSION` to use another Pants, and `COMPAT_INTERPRETER_CONSTRAINTS` plus
+`COMPAT_PYTHON_VERSION` (the constraints' minimum) to check another Python. The project needs a
+real interpreter matching its constraints, since the plugin builds the third-party venv Pyrefly
+inspects with one. When the minimum is older than 3.10, the script also checks that a `match`
+statement fails with `invalid-syntax`.
 
-The [compatibility workflow](.github/workflows/compat.yml) runs the script in two matrices, one job
-each:
+The [compatibility workflow](.github/workflows/compat.yml) runs the script in separate jobs:
 
-- every supported Pyrefly version (`--list-versions`) on this repo's Pants;
-- the default Pyrefly version (`--default-version`) on the latest stable patch of every supported
-  Pants minor: 2.27.1, 2.28.1, 2.29.1, 2.30.2, 2.31.0, 2.32.1, and 2.33.1.
+- one per supported Pyrefly version (`--list-versions`), on this repo's Pants;
+- one per supported Pants minor, at its latest stable patch (2.27.1, 2.28.1, 2.29.1, 2.30.2,
+  2.31.0, 2.32.1, and 2.33.1), with the default Pyrefly version (`--default-version`);
+- one with the default Pyrefly on this repo's Pants, against a `CPython==3.9.*` project.
 
 It runs on demand and as a required step of the release workflow, so if any job fails, nothing is
 published. It does not run on pull requests.

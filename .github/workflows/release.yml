@@ -6,8 +6,9 @@ on:
 
 jobs:
   # The compatibility suite must pass before anything is published: every supported Pyrefly version
-  # on this repo's Pants, and the default Pyrefly on every supported Pants minor. `publish` needs
-  # this job, which succeeds only when every job in the called workflow (both matrices) succeeds.
+  # on this repo's Pants, the default Pyrefly on every supported Pants minor, and a Python 3.9
+  # project. `publish` needs this job, which succeeds only when every job in the called workflow
+  # succeeds.
   compat:
     name: Pyrefly compatibility
     uses: ./.github/workflows/compat.yml
