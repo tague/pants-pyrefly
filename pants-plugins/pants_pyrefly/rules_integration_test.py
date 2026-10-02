@@ -28,6 +28,7 @@ from pants_pyrefly.rules import (
     _remap_path,
     _remap_text,
 )
+from pants_pyrefly.subsystems import MINIMUM_PINNED_VERSION, Pyrefly
 
 from pants.backend.python import target_types_rules
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
@@ -45,8 +46,46 @@ from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.util.frozendict import FrozenDict
 
-# Inherited so Pants can discover system interpreters and download the Pyrefly binary.
-_ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
+# Inherited so Pants can discover system interpreters and download the Pyrefly binary, and so the
+# `PANTS_PYREFLY_VERSION` set by `_select_pyrefly_version` reaches the options parser.
+_ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME", "PANTS_PYREFLY_VERSION"}
+
+
+def _requested_pyrefly_version() -> str | None:
+    """The Pyrefly version requested via `PYREFLY_TEST_VERSION`, or None for the plugin default.
+
+    `PYREFLY_TEST_VERSION=minimum` selects `MINIMUM_PINNED_VERSION` (CI runs the suite on both the
+    default and the minimum); an explicit `X.Y.Z` selects that pinned release. Only
+    `[pyrefly].version` is set, never `known_versions`, so this also proves the shipped pins.
+    """
+    requested = os.environ.get("PYREFLY_TEST_VERSION", "").strip()
+    if requested in ("", "default"):
+        return None
+    return MINIMUM_PINNED_VERSION if requested == "minimum" else requested
+
+
+_REQUESTED_PYREFLY_VERSION = _requested_pyrefly_version()
+_EFFECTIVE_PYREFLY_VERSION = _REQUESTED_PYREFLY_VERSION or Pyrefly.default_version
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+# Pyrefly 1.3.0 switched `--update-baseline` to a compact entry format (no `line`/`code`/
+# `description`) that older Pyrefly cannot match against.
+_requires_compact_baseline_format = pytest.mark.skipif(
+    _version_tuple(_EFFECTIVE_PYREFLY_VERSION) < (1, 3, 0),
+    reason=f"compact baseline entries need Pyrefly >= 1.3.0 (running {_EFFECTIVE_PYREFLY_VERSION})",
+)
+
+
+@pytest.fixture(autouse=True)
+def _select_pyrefly_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    if _REQUESTED_PYREFLY_VERSION:
+        monkeypatch.setenv("PANTS_PYREFLY_VERSION", _REQUESTED_PYREFLY_VERSION)
+    else:
+        monkeypatch.delenv("PANTS_PYREFLY_VERSION", raising=False)
 
 
 @pytest.fixture
@@ -63,6 +102,7 @@ def rule_runner() -> PythonRuleRunner:
             *config_files.rules(),
             *source_files.rules(),
             QueryRule(CheckResults, (PyreflyRequest,)),
+            QueryRule(Pyrefly, ()),
         ],
         target_types=[
             PythonSourcesGeneratorTarget,
@@ -82,6 +122,12 @@ def run_pyrefly(
     field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
     checks = rule_runner.request(CheckResults, [PyreflyRequest(field_sets)])
     return checks.results
+
+
+def test_runs_requested_pyrefly_version(rule_runner: PythonRuleRunner) -> None:
+    # Guards the `PYREFLY_TEST_VERSION` hook: the suite must really run on the requested version.
+    rule_runner.set_options([], env_inherit=_ENV_INHERIT)
+    assert rule_runner.request(Pyrefly, []).version == _EFFECTIVE_PYREFLY_VERSION
 
 
 # ---
@@ -381,7 +427,7 @@ def test_update_baseline_roundtrip(rule_runner: PythonRuleRunner) -> None:
     result = rule_runner.run_goal_rule(
         PyreflyUpdateBaseline,
         args=["--pyrefly-baseline=pyrefly-baseline.json", "src/project::"],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     baseline_path = os.path.join(rule_runner.build_root, "pyrefly-baseline.json")
@@ -425,7 +471,7 @@ def test_lsp_config_writes_search_path(rule_runner: PythonRuleRunner) -> None:
             "src/project/BUILD": "python_sources()",
         }
     )
-    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit={"PATH", "PYENV_ROOT", "HOME"})
+    result = rule_runner.run_goal_rule(PyreflyLspConfig, env_inherit=_ENV_INHERIT)
     assert result.exit_code == 0
     config_path = os.path.join(rule_runner.build_root, "pyrefly.toml")
     assert os.path.exists(config_path)
@@ -452,7 +498,7 @@ def test_lsp_config_dedupes_nested_source_roots(rule_runner: PythonRuleRunner) -
     result = rule_runner.run_goal_rule(
         PyreflyLspConfig,
         global_args=['--source-root-patterns=["/src", "/src/python"]'],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
@@ -476,7 +522,7 @@ def test_lsp_config_exclude_source_roots(rule_runner: PythonRuleRunner) -> None:
         PyreflyLspConfig,
         global_args=['--source-root-patterns=["/src", "/src/python"]'],
         args=["--pyrefly-exclude-source-roots=['src']"],
-        env_inherit={"PATH", "PYENV_ROOT", "HOME"},
+        env_inherit=_ENV_INHERIT,
     )
     assert result.exit_code == 0
     with open(os.path.join(rule_runner.build_root, "pyrefly.toml")) as fh:
@@ -545,6 +591,44 @@ def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> Non
         paths = {error["path"] for error in json.load(fh)["errors"]}
     assert "src/a/f.py" in paths
     assert "src/b/g.py" in paths
+
+
+@_requires_compact_baseline_format
+def test_baseline_gating_compact_multi_partition(rule_runner: PythonRuleRunner) -> None:
+    # A merged two-partition baseline in the compact format Pyrefly >= 1.3 writes (what
+    # `pyrefly-update-baseline` now produces): real repo paths, no `line`/`code`/`description`.
+    # `check` must remap each entry onto that partition's staged path and gate both partitions.
+    # (`test_baseline_gating` keeps covering the older full-entry format.)
+    def entry(path: str) -> dict:
+        return {
+            "column": 10,
+            "path": path,
+            "name": "bad-assignment",
+            "concise_description": "`Literal['bad']` is not assignable to `int`",
+            "severity": "error",
+        }
+
+    rule_runner.write_files(
+        {
+            "src/a/f.py": 'x: int = "bad"\n',
+            "src/a/BUILD": "python_sources(interpreter_constraints=['==3.11.*'])",
+            "src/b/g.py": 'y: int = "bad"\n',
+            "src/b/BUILD": "python_sources(interpreter_constraints=['==3.12.*'])",
+            "pyrefly.toml": 'preset = "legacy"\n',
+            "bl.json": json.dumps({"errors": [entry("src/a/f.py"), entry("src/b/g.py")]}),
+        }
+    )
+    targets = [
+        rule_runner.get_target(Address("src/a", relative_file_path="f.py")),
+        rule_runner.get_target(Address("src/b", relative_file_path="g.py")),
+    ]
+    ungated = run_pyrefly(rule_runner, targets)
+    assert len(ungated) == 2
+    assert all(result.exit_code == 1 for result in ungated)
+
+    gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
+    assert len(gated) == 2
+    assert all(result.exit_code == 0 for result in gated)
 
 
 def test_lsp_config_respects_pyproject(rule_runner: PythonRuleRunner) -> None:
