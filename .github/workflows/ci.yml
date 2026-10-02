@@ -42,15 +42,7 @@ jobs:
       - name: Test
         run: "pants test ::"
 
-      # The plugin ships pins for every stable Pyrefly from `MINIMUM_PINNED_VERSION` (in
-      # subsystems.py) up to the default; the step above covers the default, this one the minimum.
-      # `minimum` is resolved by the test itself, so the version lives only in subsystems.py.
-      - name: Test on the minimum pinned Pyrefly
-        env:
-          PYREFLY_TEST_VERSION: minimum
-        run: "pants test pants-plugins/pants_pyrefly:tests"
-
-      - name: Check Pyrefly version pins are current
+      - name: Verify the shipped Pyrefly pins
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: "python3 build-support/bin/generate_known_versions.py --check"

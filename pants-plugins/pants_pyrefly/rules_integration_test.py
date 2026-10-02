@@ -29,7 +29,7 @@ from pants_pyrefly.rules import (
     _remap_text,
 )
 from pants_pyrefly import subsystems
-from pants_pyrefly.subsystems import MINIMUM_PINNED_VERSION, Pyrefly
+from pants_pyrefly.subsystems import Pyrefly
 
 from pants.backend.python import target_types_rules
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
@@ -48,46 +48,8 @@ from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.util.frozendict import FrozenDict
 
-# Inherited so Pants can discover system interpreters and download the Pyrefly binary, and so the
-# `PANTS_PYREFLY_VERSION` set by `_select_pyrefly_version` reaches the options parser.
-_ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME", "PANTS_PYREFLY_VERSION"}
-
-
-def _requested_pyrefly_version() -> str | None:
-    """The Pyrefly version requested via `PYREFLY_TEST_VERSION`, or None for the plugin default.
-
-    `PYREFLY_TEST_VERSION=minimum` selects `MINIMUM_PINNED_VERSION` (CI runs the suite on both the
-    default and the minimum); an explicit `X.Y.Z` selects that pinned release. Only
-    `[pyrefly].version` is set, never `known_versions`, so this also proves the shipped pins.
-    """
-    requested = os.environ.get("PYREFLY_TEST_VERSION", "").strip()
-    if requested in ("", "default"):
-        return None
-    return MINIMUM_PINNED_VERSION if requested == "minimum" else requested
-
-
-_REQUESTED_PYREFLY_VERSION = _requested_pyrefly_version()
-_EFFECTIVE_PYREFLY_VERSION = _REQUESTED_PYREFLY_VERSION or Pyrefly.default_version
-
-
-def _version_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
-
-
-# Pyrefly 1.3.0 switched `--update-baseline` to a compact entry format (no `line`/`code`/
-# `description`) that older Pyrefly cannot match against.
-_requires_compact_baseline_format = pytest.mark.skipif(
-    _version_tuple(_EFFECTIVE_PYREFLY_VERSION) < (1, 3, 0),
-    reason=f"compact baseline entries need Pyrefly >= 1.3.0 (running {_EFFECTIVE_PYREFLY_VERSION})",
-)
-
-
-@pytest.fixture(autouse=True)
-def _select_pyrefly_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    if _REQUESTED_PYREFLY_VERSION:
-        monkeypatch.setenv("PANTS_PYREFLY_VERSION", _REQUESTED_PYREFLY_VERSION)
-    else:
-        monkeypatch.delenv("PANTS_PYREFLY_VERSION", raising=False)
+# Inherited so Pants can discover system interpreters and download the Pyrefly binary.
+_ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
 
 
 @pytest.fixture
@@ -104,7 +66,6 @@ def rule_runner() -> PythonRuleRunner:
             *config_files.rules(),
             *source_files.rules(),
             QueryRule(CheckResults, (PyreflyRequest,)),
-            QueryRule(Pyrefly, ()),
         ],
         target_types=[
             PythonSourcesGeneratorTarget,
@@ -124,12 +85,6 @@ def run_pyrefly(
     field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
     checks = rule_runner.request(CheckResults, [PyreflyRequest(field_sets)])
     return checks.results
-
-
-def test_runs_requested_pyrefly_version(rule_runner: PythonRuleRunner) -> None:
-    # Guards the `PYREFLY_TEST_VERSION` hook: the suite must really run on the requested version.
-    rule_runner.set_options([], env_inherit=_ENV_INHERIT)
-    assert rule_runner.request(Pyrefly, []).version == _EFFECTIVE_PYREFLY_VERSION
 
 
 # ---
@@ -595,7 +550,6 @@ def test_update_baseline_merges_partitions(rule_runner: PythonRuleRunner) -> Non
     assert "src/b/g.py" in paths
 
 
-@_requires_compact_baseline_format
 def test_baseline_gating_compact_multi_partition(rule_runner: PythonRuleRunner) -> None:
     # A merged two-partition baseline in the compact format Pyrefly >= 1.3 writes (what
     # `pyrefly-update-baseline` now produces): real repo paths, no `line`/`code`/`description`.

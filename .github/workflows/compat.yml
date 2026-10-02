@@ -1,0 +1,53 @@
+name: Pyrefly compatibility
+
+# Runs build-support/ci/compat_test.sh against every supported Pyrefly version (pinned minus
+# denylisted, from subsystems.py). It gates releases: release.yml calls this workflow and the PyPI
+# publish job needs it. It also runs on demand. Deliberately not run on pull requests or on a
+# schedule.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: list supported Pyrefly versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.list.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: list
+        name: Read the supported versions from subsystems.py
+        run: |
+          versions="$(python3 build-support/bin/generate_known_versions.py --list-versions)"
+          echo "Supported Pyrefly versions: ${versions}"
+          echo "versions=${versions}" >> "$GITHUB_OUTPUT"
+
+  compat:
+    name: compat (Pyrefly ${{ matrix.pyrefly-version }})
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pyrefly-version: ${{ fromJSON(needs.versions.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The compat project runs under this repo's Pants (2.32, CPython 3.14) and type-checks a
+      # sample project with interpreter constraints `>=3.11,<3.15`.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: compat-v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      - name: Compatibility test
+        run: bash build-support/ci/compat_test.sh "${{ matrix.pyrefly-version }}"

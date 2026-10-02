@@ -11,9 +11,6 @@ python_tests(
     resolve="pants-plugins",
     interpreter_constraints=["==3.14.*"],
     skip_pyrefly=True,
-    # `PYREFLY_TEST_VERSION=minimum` (or an explicit pinned `X.Y.Z`) runs the integration tests on
-    # that Pyrefly instead of the default; CI uses it to cover `MINIMUM_PINNED_VERSION`.
-    extra_env_vars=["PYREFLY_TEST_VERSION"],
 )
 
 python_distribution(
