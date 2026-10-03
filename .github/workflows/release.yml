@@ -27,9 +27,9 @@ jobs:
       # Required for PyPI Trusted Publishing (OIDC). No API token needed.
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -42,7 +42,7 @@ jobs:
         run: pants package pants-plugins/pants_pyrefly:dist
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           packages-dir: dist/
           # Fail if the artifacts look wrong rather than silently skipping.

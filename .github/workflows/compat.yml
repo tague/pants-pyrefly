@@ -25,7 +25,7 @@ jobs:
       versions: ${{ steps.list.outputs.versions }}
       default: ${{ steps.list.outputs.default }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - id: list
         name: Read the supported and default versions from subsystems.py
@@ -46,11 +46,11 @@ jobs:
       matrix:
         pyrefly-version: ${{ fromJSON(needs.versions.outputs.versions) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # The compat project runs under this repo's Pants (2.33, CPython 3.14) and type-checks a
       # sample project with interpreter constraints `>=3.11,<3.15`.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -72,12 +72,12 @@ jobs:
         # Latest stable patch of every supported Pants minor (2.27-2.33).
         pants-version: ["2.27.1", "2.28.1", "2.29.1", "2.30.2", "2.31.0", "2.32.1", "2.33.1"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Pants brings its own interpreter (CPython 3.11 through 2.31, 3.14 from 2.32). The compat
       # project's interpreter constraints are `>=3.11,<3.15`; install both ends of that range plus
       # 3.12, as the smoke matrix in ci.yml does.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: |
             3.11
@@ -97,15 +97,17 @@ jobs:
   compat-python39:
     name: compat (Python 3.9 project, Pyrefly ${{ needs.versions.outputs.default }})
     needs: versions
-    runs-on: ubuntu-latest
+    # Pinned: setup-python only ships Python 3.9 (end-of-life) for Ubuntu 22.04 and 24.04, and
+    # `ubuntu-latest` moves to 26.04 in late 2026. Move this pin only to an image that has 3.9.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # The plugin passes `--python-version` from the minimum of the project's interpreter
       # constraints, and builds the venv behind `--python-interpreter-path` with an interpreter
       # that satisfies them, so a `CPython==3.9.*` project needs a real Python 3.9. Pants itself
       # runs on its own bundled interpreter.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: |
             3.9
