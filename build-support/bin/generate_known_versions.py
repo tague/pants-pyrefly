@@ -67,6 +67,8 @@ RELEASES_API = "https://api.github.com/repos/facebook/pyrefly/releases?per_page=
 API_HOST = "api.github.com"
 MINIMUM_CONSTANT = "MINIMUM_PINNED_VERSION"
 DENYLIST_CONSTANT = "DENYLISTED_VERSIONS"
+# How `--check-upstream` spells this script in the commands it suggests (run from the repo root).
+COMMAND = "python3 build-support/bin/generate_known_versions.py"
 
 # Network retry policy: 3 attempts total, sleeping 1s then 2s, only on transient failures.
 MAX_ATTEMPTS = 3
@@ -873,11 +875,25 @@ def run_check_upstream(config: PluginConfig, token: str | None) -> int:
         print(f"  newer than the default {config.version}: {', '.join(newer)}", file=sys.stderr)
     if in_range:
         print(f"  at or below the default (backports): {', '.join(in_range)}", file=sys.stderr)
-    print(
-        "  Pin with `--write` (plus `--version X` to move the default), or deliberately skip one "
-        'with `--remove X --reason "..."`.',
-        file=sys.stderr,
-    )
+    # `--write` pins every missing release in [minimum, target], so moving the default to the
+    # newest release also pins the backports, and plain `--write` pins just the backports.
+    hints: list[tuple[str, str]] = []
+    if newer:
+        newest = max(newer, key=_version_key)
+        also = " (backports included)" if in_range else ""
+        hints.append(
+            (
+                f"To make {newest} the default and pin every missing release{also}:",
+                f"--version {newest} --write",
+            )
+        )
+    if in_range:
+        what = "only the backports, keeping" if newer else "the backports, keeping"
+        hints.append((f"To pin {what} the default {config.version}:", "--write"))
+    hints.append(("To skip a release instead (denylists it):", '--remove X.Y.Z --reason "..."'))
+    for text, args in hints:
+        print(f"  {text}", file=sys.stderr)
+        print(f"    {COMMAND} {args}", file=sys.stderr)
     return 1
 
 
