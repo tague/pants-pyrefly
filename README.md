@@ -292,7 +292,9 @@ python3 $GEN --default-version                # the default version
   newer than the default or an in-range backport, never fails `--check`, so a new Pyrefly release
   never turns unrelated CI red.
 - `--check-upstream` lists every stable release at or above the minimum that is neither pinned
-  nor denylisted, and exits 1 if there are any.
+  nor denylisted, and exits 1 if there are any. It also prints the commands to run:
+  `--version <newest> --write` when there are newer releases (it pins the backports too),
+  `--write` for backports alone, and `--remove X.Y.Z --reason "..."` to skip one.
 - `--remove` is the only removal path: it deletes the version's pins (if any) and records the
   reason in `DENYLISTED_VERSIONS`, so `--write` never re-adds it and `--check-upstream` stops
   reporting it. It also works for a never-pinned release you want to skip. It refuses the
@@ -314,6 +316,17 @@ fails, and the fix is `--remove <version> --reason "..."`.
 The script fetches each asset's published `.sha256` sidecar (rejecting anything that isn't a
 64-character hex digest) and size from the GitHub release, retrying transient failures up to twice.
 Set `GITHUB_TOKEN` to avoid API rate limits; the token is only sent to `api.github.com`.
+
+The [upstream workflow](.github/workflows/upstream.yml) runs `--check-upstream` every Monday
+(06:17 UTC), and on demand. It only reports: it never writes pins or opens a PR, and it does not
+run the compatibility suite. When it fails, the job summary shows the script's output. An `error:`
+line saying "neither pinned nor denylisted" is a real finding: run one of the printed commands
+and open a PR. Any other failure, such as `GET ... failed after 3 attempts`, is usually a GitHub
+API or network problem, so re-run the workflow. GitHub notifies the user who last changed the
+workflow's cron line of a failed scheduled run, subject to their Actions notification settings.
+
+GitHub disables scheduled workflows in a public repository after 60 days without repository
+activity. If the weekly run stops, re-enable it from the repository's Actions tab.
 
 ### Pyrefly compatibility suite
 

@@ -1,0 +1,16 @@
+# Dependabot version updates: keep the actions used in .github/workflows/ current.
+#
+# Only the `github-actions` ecosystem, on purpose. There is no `pip` or `uv` entry: this repo's
+# Python dependencies are resolved into Pants lockfiles (build-support/lockfiles/*.lock), which
+# Dependabot cannot regenerate correctly. Update them with `pants generate-lockfiles` instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR per week for all action updates, instead of one per action.
+    groups:
+      github-actions:
+        patterns:
+          - "*"

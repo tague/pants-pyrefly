@@ -6,6 +6,7 @@ from __future__ import annotations
 import http.client
 import io
 import json
+import shlex
 import socket
 import subprocess
 import sys
@@ -376,6 +377,60 @@ def test_check_upstream_lists_newer_and_backports(fake_github, tmp_path, capsys)
     err = capsys.readouterr().err
     assert "newer than the default 1.9.0: 1.11.0" in err
     assert "at or below the default (backports): 1.2.1" in err
+
+
+_GEN = "python3 build-support/bin/generate_known_versions.py"
+_SKIP = f'{_GEN} --remove X.Y.Z --reason "..."'
+
+
+@pytest.mark.parametrize(
+    "known, default, denylist, listed, commands",
+    [
+        pytest.param(
+            ["1.2.0", "1.1.1"],
+            "1.2.0",
+            {},
+            ["  newer than the default 1.2.0: 1.11.0, 1.9.0, 1.2.1"],
+            [f"{_GEN} --version 1.11.0 --write", _SKIP],
+            id="newer-only",
+        ),
+        pytest.param(
+            ["1.9.0", "1.2.0", "1.1.1"],
+            "1.9.0",
+            {"1.11.0": "regression"},
+            ["  at or below the default (backports): 1.2.1"],
+            [f"{_GEN} --write", _SKIP],
+            id="backports-only",
+        ),
+        pytest.param(
+            ["1.2.0"],
+            "1.2.0",
+            {},
+            [
+                "  newer than the default 1.2.0: 1.11.0, 1.9.0, 1.2.1",
+                "  at or below the default (backports): 1.1.1",
+            ],
+            [f"{_GEN} --version 1.11.0 --write", f"{_GEN} --write", _SKIP],
+            id="newer-and-backports",
+        ),
+    ],
+)
+def test_check_upstream_suggests_commands_that_resolve_it(
+    fake_github, tmp_path, capsys, known, default, denylist, listed, commands
+) -> None:
+    path = _write_subsystems(tmp_path, _pins(known), default=default, denylist=denylist)
+    assert gkv.main(["--subsystems", str(path), "--check-upstream"]) == 1
+    err = capsys.readouterr().err.splitlines()
+    assert err[0] == "error: stable Pyrefly releases are neither pinned nor denylisted:"
+    # Newest first, and the suggested `--version` is the newest release, whatever the order.
+    assert err[1 : 1 + len(listed)] == listed
+    assert [line.strip() for line in err if line.strip().startswith("python3 ")] == commands
+
+    # The first suggestion, run as printed (plus `--subsystems`), clears the finding.
+    argv = shlex.split(commands[0])[2:]
+    assert gkv.main(["--subsystems", str(path), *argv]) == 0
+    capsys.readouterr()
+    assert gkv.main(["--subsystems", str(path), "--check-upstream"]) == 0
 
 
 def test_check_upstream_ignores_denylisted(fake_github, tmp_path) -> None:

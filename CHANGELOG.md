@@ -62,6 +62,14 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   Failures print a single `error: ...` line (with file and line where relevant), never a
   traceback. The script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
   and retries transient network failures, including downloads cut off mid-body.
+- Maintenance: a weekly workflow (`.github/workflows/upstream.yml`) runs
+  `generate_known_versions.py --check-upstream` and fails when a stable Pyrefly release is neither
+  pinned nor denylisted, showing the script's output in the job summary. It only reports: it
+  never writes pins or opens a PR. On failure, `--check-upstream` prints the exact commands to pin
+  the new releases (or skip one).
+- Maintenance: Dependabot (`.github/dependabot.yml`) now opens one grouped weekly PR for GitHub
+  Actions updates. Python dependencies stay out of it, since Dependabot cannot regenerate Pants
+  lockfiles.
 - Maintenance: the repo now develops, tests, and builds releases on Pants 2.33.1 (was 2.32.0). PR
   CI smoke-tests the latest patch of a subset of the supported minors: 2.27.1, 2.31.0, 2.32.1, and
   2.33.1. The supported Pants range (2.27–2.33) and the published wheel's requirements are
