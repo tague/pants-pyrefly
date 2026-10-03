@@ -50,7 +50,7 @@ jobs:
 
       # The compat project runs under this repo's Pants (2.33, CPython 3.14) and type-checks a
       # sample project with interpreter constraints `>=3.11,<3.15`.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
 
@@ -77,7 +77,7 @@ jobs:
       # Pants brings its own interpreter (CPython 3.11 through 2.31, 3.14 from 2.32). The compat
       # project's interpreter constraints are `>=3.11,<3.15`; install both ends of that range plus
       # 3.12, as the smoke matrix in ci.yml does.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: |
             3.11
@@ -105,7 +105,7 @@ jobs:
       # constraints, and builds the venv behind `--python-interpreter-path` with an interpreter
       # that satisfies them, so a `CPython==3.9.*` project needs a real Python 3.9. Pants itself
       # runs on its own bundled interpreter.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: |
             3.9
