@@ -97,7 +97,9 @@ jobs:
   compat-python39:
     name: compat (Python 3.9 project, Pyrefly ${{ needs.versions.outputs.default }})
     needs: versions
-    runs-on: ubuntu-latest
+    # Pinned: setup-python only ships Python 3.9 (end-of-life) for Ubuntu 22.04 and 24.04, and
+    # `ubuntu-latest` moves to 26.04 in late 2026. Move this pin only to an image that has 3.9.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
