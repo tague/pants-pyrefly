@@ -15,7 +15,7 @@ jobs:
     name: lint / check / test / package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # Pants 2.33 runs on CPython 3.14 (the `pants-plugins` resolve targets 3.14). The integration
       # tests also create 3.11 and 3.12 partitions (multi-interpreter baseline merge), so install
@@ -63,7 +63,7 @@ jobs:
       matrix:
         pants-version: ["2.27.1", "2.31.0", "2.32.1", "2.33.1"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
