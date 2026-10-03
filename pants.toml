@@ -1,5 +1,5 @@
 [GLOBAL]
-pants_version = "2.32.0"
+pants_version = "2.33.1"
 pythonpath = ["%(buildroot)s/pants-plugins"]
 backend_packages = [
     "pants.backend.python",
@@ -12,7 +12,8 @@ backend_packages = [
 
 [python]
 enable_resolves = true
-interpreter_constraints = [">=3.9,<3.15"]
+# Floor is 3.10: Pants 2.33's built-in pytest lockfile no longer supports CPython 3.9.
+interpreter_constraints = [">=3.10,<3.15"]
 default_resolve = "python-default"
 
 [python.resolves]
@@ -21,7 +22,7 @@ python-default = "build-support/lockfiles/python-default.lock"
 
 [python.resolves_to_interpreter_constraints]
 # The plugin imports `pantsbuild.pants`, which only runs on the interpreter Pants itself uses.
-# Pants 2.32 ships as cp314, so the plugin resolve must target CPython 3.14.
+# Pants 2.33 ships as cp314, so the plugin resolve must target CPython 3.14.
 pants-plugins = ["==3.14.*"]
 
 [python-repos]

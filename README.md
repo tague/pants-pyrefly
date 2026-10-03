@@ -9,8 +9,9 @@ that imports resolve correctly.
 
 ## Requirements
 
-- **Pants 2.27–2.33.** A single codebase supports both the legacy (`Get`/`MultiGet`-era) and modern
-  (call-by-name) rules APIs via a small version-conditional import; verified on 2.27 and 2.33.
+- **Pants 2.27–2.33.** A single codebase uses the call-by-name rules API on every supported
+  version and detects the two API differences between those versions at runtime; verified on
+  every minor from 2.27 to 2.33.
 - The **published wheel** is pure-Python — `Requires-Python: >=3.11`, with **no `pantsbuild.pants`
   dependency** (Pants provides itself at runtime) — so a single release installs into any supported
   Pants, from 2.27 (CPython 3.11) through 2.33 (CPython 3.14).
@@ -190,10 +191,14 @@ or interpreter constraints, each partition's config is printed under its own hea
 | `0.2.0` | `2.27`–`2.32` | `1.1.1` |
 | `0.1.0` | `2.27`–`2.32` | `1.1.1` |
 
-The plugin supports both the legacy (`Get`/`MultiGet`) and modern (call-by-name) rules APIs through
-a small version-conditional import (the rules API changed at Pants 2.30, and again removed `Get`
-by 2.32). CI smoke-tests consumption on 2.27, 2.31, 2.32, and 2.33; in-between versions use the
-same modern API.
+The plugin uses the call-by-name rules API, which every supported version provides; it never uses
+`Get`/`MultiGet` (removed by Pants 2.32). Two things differ across the supported range, and the
+plugin detects which side it is on at runtime: the coarsened-targets rule was renamed
+(`coarsened_targets` on 2.27–2.28, `resolve_coarsened_targets` on 2.29+), and the check goal's
+`default_process_cache_scope`, which honors `--force`, only exists on 2.32+ (older versions cache
+successful runs, so `pants check --force` does not rerun Pyrefly there). CI smoke-tests
+consumption on 2.27, 2.31, 2.32, and 2.33 on every pull request, and the pre-release
+[compatibility suite](#pyrefly-compatibility-suite) runs on every minor from 2.27 to 2.33.
 
 ## Supported Pyrefly versions
 
@@ -274,6 +279,7 @@ python3 $GEN --write                          # add missing pins (e.g. a backpor
 python3 $GEN --check                          # verify the shipped pins (what CI runs)
 python3 $GEN --remove <ver> --reason "<why>"  # drop a version's pins and denylist it
 python3 $GEN --list-versions                  # supported versions as JSON (the compat matrix)
+python3 $GEN --default-version                # the default version
 ```
 
 - `--write` only adds. It inserts pins for every stable release in `[minimum, default]` that isn't
@@ -316,20 +322,33 @@ source and drives real Pants runs with only `--pyrefly-version=<version>` set, s
 resolve the download. It checks that a clean file passes, that a missing import fails with
 `missing-import`, that `pyrefly-update-baseline` followed by a gated `check` passes, and that
 `pyrefly-suppress` followed by `check` passes. For every Pyrefly process it asserts, from the
-binary in that process's preserved sandbox, that `<version>` is what actually ran. Each Pants run
-uses an execution root inside the script's own work directory, so the script leaves nothing behind
-in `$TMPDIR`.
+binary in that process's preserved sandbox, that `<version>` is what actually ran, and that the
+process got `--python-version` set to the project's minimum Python. Each Pants run uses an
+execution root inside the script's own work directory, so the script leaves nothing behind in
+`$TMPDIR`.
 
-The [compatibility workflow](.github/workflows/compat.yml) runs the script for every supported
-version (`--list-versions`), one job each. It runs on demand and as a required step of the release
-workflow, so if any supported version fails, nothing is published. It does not run on pull
-requests.
+The script runs under this repo's Pants with a `CPython>=3.11,<3.15` project by default. Set
+`PANTS_VERSION` to use another Pants, and `COMPAT_INTERPRETER_CONSTRAINTS` plus
+`COMPAT_PYTHON_VERSION` (the constraints' minimum) to check another Python. The project needs a
+real interpreter matching its constraints, since the plugin builds the third-party venv Pyrefly
+inspects with one. When the minimum is older than 3.10, the script also checks that a `match`
+statement fails with `invalid-syntax`.
+
+The [compatibility workflow](.github/workflows/compat.yml) runs the script in separate jobs:
+
+- one per supported Pyrefly version (`--list-versions`), on this repo's Pants;
+- one per supported Pants minor, at its latest stable patch (2.27.1, 2.28.1, 2.29.1, 2.30.2,
+  2.31.0, 2.32.1, and 2.33.1), with the default Pyrefly version (`--default-version`);
+- one with the default Pyrefly on this repo's Pants, against a `CPython==3.9.*` project.
+
+It runs on demand and as a required step of the release workflow, so if any job fails, nothing is
+published. It does not run on pull requests.
 
 ## Releasing
 
 Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) first runs the
-[Pyrefly compatibility suite](#pyrefly-compatibility-suite) for every supported version, then
-builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
+[Pyrefly compatibility suite](#pyrefly-compatibility-suite) (every supported Pyrefly version, and
+every supported Pants minor), then builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
 no API tokens). Configure a PyPI trusted publisher for this repo + the `release.yml` workflow first.
 
 ## License

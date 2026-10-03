@@ -9,11 +9,21 @@
 #   1. `check` on a clean file passes;
 #   2. `check` on a file with a missing import fails with that `missing-import` error;
 #   3. `pyrefly-update-baseline`, then `check` gated on that baseline, passes;
-#   4. `pyrefly-suppress`, then `check`, passes.
+#   4. `pyrefly-suppress`, then `check`, passes;
+#   5. (only when the minimum Python is older than 3.10) `check` on a file using a `match` statement
+#      fails with Pyrefly's `invalid-syntax` error for that Python version, proving Pyrefly really
+#      checked the code as that version.
 #
 # Every Pyrefly process is forced to actually run (`--no-local-cache`) with its sandbox preserved,
 # and the script asserts that the binary in each preserved sandbox reports `pyrefly <version>`, so
-# it fails loudly if any other Pyrefly executed.
+# it fails loudly if any other Pyrefly executed. It also asserts that each process was given
+# `--python-version=<minimum Python>`, and that the interpreter it was pointed at
+# (`--python-interpreter-path`) is at least that version.
+#
+# The plugin derives `--python-version` from the minimum of the partition's interpreter
+# constraints, and builds the venv behind `--python-interpreter-path` (third-party packages) with
+# an interpreter matching those constraints. So the machine needs a real interpreter that
+# satisfies them: a `CPython==3.9.*` project needs Python 3.9 installed.
 #
 # Everything Pants executes lands in the script's own work directory: each run gets its own
 # `--local-execution-root-dir` there (sandboxes and `immutable_inputs*`), so cleanup is removing
@@ -21,6 +31,11 @@
 #
 # Usage: build-support/ci/compat_test.sh 1.2.0
 #   PANTS_VERSION                  overrides the Pants version (default: this repo's pants.toml).
+#   COMPAT_INTERPRETER_CONSTRAINTS the test project's `[python].interpreter_constraints`
+#                                  (default: CPython>=3.11,<3.15).
+#   COMPAT_PYTHON_VERSION          the minimum Python those constraints allow, i.e. the
+#                                  `--python-version` the plugin must pass (default: 3.11). Set it
+#                                  together with COMPAT_INTERPRETER_CONSTRAINTS.
 #   COMPAT_PANTS_PYREFLY_VERSION   self-test only: the version actually passed to Pants, while the
 #                                  script still expects <version>. Pointing it at a different
 #                                  release must make the script fail on the version assertion.
@@ -31,6 +46,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLUGIN_SRC="${REPO_ROOT}/pants-plugins/pants_pyrefly"
 PANTS_VERSION="${PANTS_VERSION:-$(sed -n 's/^pants_version = "\(.*\)"$/\1/p' "${REPO_ROOT}/pants.toml")}"
 PANTS_PYREFLY_VERSION_ARG="${COMPAT_PANTS_PYREFLY_VERSION:-$PYREFLY_VERSION}"
+INTERPRETER_CONSTRAINTS="${COMPAT_INTERPRETER_CONSTRAINTS:-CPython>=3.11,<3.15}"
+PYTHON_VERSION="${COMPAT_PYTHON_VERSION:-3.11}"
+[[ "$PYTHON_VERSION" =~ ^3\.[0-9]+$ ]] ||
+  { echo "COMPAT_PYTHON_VERSION must be 3.N, got '${PYTHON_VERSION}'" >&2; exit 2; }
+PYTHON_MINOR="${PYTHON_VERSION#3.}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pyrefly-compat.XXXXXX")"
 PROJECT="${WORK}/project"
@@ -43,7 +63,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-LABEL="[Pyrefly ${PYREFLY_VERSION}, Pants ${PANTS_VERSION}]"
+LABEL="[Pyrefly ${PYREFLY_VERSION}, Pants ${PANTS_VERSION}, ${INTERPRETER_CONSTRAINTS}]"
 step() { echo "== ${LABEL} $*"; }
 fail() {
   echo "COMPAT FAILED ${LABEL}: $*" >&2
@@ -61,7 +81,7 @@ pythonpath = ["%(buildroot)s/pants-plugins"]
 backend_packages = ["pants.backend.python", "pants_pyrefly"]
 
 [python]
-interpreter_constraints = ["CPython>=3.11,<3.15"]
+interpreter_constraints = ["${INTERPRETER_CONSTRAINTS}"]
 
 [python-repos]
 indexes = ["https://pypi.org/simple/"]
@@ -92,9 +112,11 @@ run_pants() {
 }
 
 # Assert, from the preserved sandboxes of the run that just finished, that every Pyrefly process
-# executed the requested version. Runs before cleanup: the binaries live under $EXEC_ROOT.
+# executed the requested version, was told `--python-version=$PYTHON_VERSION`, and was pointed at an
+# interpreter of at least that version. Runs before cleanup: the binaries live under $EXEC_ROOT.
 assert_ran_requested_version() {
-  local count=0 run_sh dir ran
+  local count=0 run_sh dir ran interp interp_version
+  local interpreters=()
   for run_sh in "$EXEC_ROOT"/pants-sandbox-*/__run.sh; do
     [[ -f "$run_sh" ]] || continue
     grep -q '__pyrefly_tool/pyrefly' "$run_sh" || continue
@@ -103,11 +125,26 @@ assert_ran_requested_version() {
       fail "could not run the Pyrefly binary preserved in $dir: $ran"
     [[ "$ran" == "pyrefly ${PYREFLY_VERSION}" ]] ||
       fail "expected 'pyrefly ${PYREFLY_VERSION}', but this run executed '${ran}' (sandbox $dir)"
+    grep -Eq -- "--python-version=${PYTHON_VERSION//./\\.}([^0-9]|\$)" "$run_sh" ||
+      fail "expected --python-version=${PYTHON_VERSION} in the Pyrefly command (sandbox $dir):
+$(cat "$run_sh")"
+    interp="$(grep -Eo -- "--python-interpreter-path=[^ '\"]+" "$run_sh" | head -n 1)"
+    interp="${interp#--python-interpreter-path=}"
+    [[ -n "$interp" ]] || fail "no --python-interpreter-path in the Pyrefly command (sandbox $dir)"
+    interp_version="$(cd "$dir" && "$interp" -c \
+      'import sys; print("%d.%d" % sys.version_info[:2])' 2>&1)" ||
+      fail "could not run the interpreter Pyrefly was given ($interp, sandbox $dir):" \
+        "$interp_version"
+    [[ "$interp_version" =~ ^3\.([0-9]+)$ ]] && ((BASH_REMATCH[1] >= PYTHON_MINOR)) ||
+      fail "Pyrefly was pointed at Python '${interp_version}', older than ${PYTHON_VERSION}" \
+        "(sandbox $dir)"
+    interpreters+=("$interp_version")
     count=$((count + 1))
   done
   ((count > 0)) || fail "no Pyrefly process sandbox was preserved, so the version is unproven:
 $OUT"
-  echo "   verified: ${count} Pyrefly process(es) ran 'pyrefly ${PYREFLY_VERSION}'"
+  echo "   verified: ${count} Pyrefly process(es) ran 'pyrefly ${PYREFLY_VERSION}'" \
+    "with --python-version=${PYTHON_VERSION} and interpreter Python ${interpreters[*]}"
 }
 
 step "1. check on a clean file must PASS"
@@ -155,5 +192,23 @@ $(cat src/bad.py)"
 run_pants check src:: || fail "check after pyrefly-suppress failed:
 $OUT"
 assert_ran_requested_version
+
+if ((PYTHON_MINOR < 10)); then
+  step "5. check on a file with a match statement (Python 3.10+) must FAIL with invalid-syntax"
+  mkdir -p syntax
+  echo 'python_sources()' >syntax/BUILD
+  printf '%s\n' 'def kind(value: object) -> str:' '    match value:' '        case _:' \
+    '            return "any"' >syntax/uses_match.py
+  if run_pants check syntax/uses_match.py; then
+    fail "check passed on a match statement under Python ${PYTHON_VERSION}:
+$OUT"
+  fi
+  grep -q 'invalid-syntax' <<<"$OUT" || fail "no invalid-syntax error in the output:
+$OUT"
+  grep -q "Python ${PYTHON_VERSION} " <<<"$OUT" ||
+    fail "the invalid-syntax error does not name Python ${PYTHON_VERSION}:
+$OUT"
+  assert_ran_requested_version
+fi
 
 echo "COMPAT OK ${LABEL}"

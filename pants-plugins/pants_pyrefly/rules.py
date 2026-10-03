@@ -52,10 +52,10 @@ from pants_pyrefly.skip_field import SkipPyreflyField
 from pants_pyrefly.subsystems import Pyrefly
 
 try:
-    # Pants >= 2.30 renamed this call-by-name rule.
+    # Pants >= 2.29 renamed this call-by-name rule.
     from pants.engine.internals.graph import resolve_coarsened_targets as coarsened_targets_get
 except ImportError:
-    # Pants < 2.30 (e.g. 2.27) — identical call signature, earlier name.
+    # Pants < 2.29 (2.27, 2.28) — identical call signature, earlier name.
     from pants.engine.internals.graph import coarsened_targets as coarsened_targets_get
 from pants.engine.intrinsics import (
     add_prefix,
@@ -609,8 +609,8 @@ async def pyrefly_typecheck_partition(
         platform,
         python_setup,
         update_baseline=False,
-        # `default_process_cache_scope` (which honors `--force`) exists on Pants >= 2.30;
-        # on 2.27 fall back to the normal "cache successful runs" scope.
+        # `default_process_cache_scope` (which honors `--force`) exists on Pants >= 2.32;
+        # on older versions fall back to the normal "cache successful runs" scope.
         cache_scope=getattr(
             check_subsystem, "default_process_cache_scope", ProcessCacheScope.SUCCESSFUL
         ),

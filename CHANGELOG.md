@@ -46,18 +46,26 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
   `pyrefly-suppress` with only `--pyrefly-version` set, and asserts that the requested Pyrefly
-  binary is the one that ran. The release workflow publishes nothing if any version fails.
+  binary is the one that ran. It also runs the default Pyrefly on the latest patch of every
+  supported Pants minor: 2.27.1, 2.28.1, 2.29.1, 2.30.2, 2.31.0, 2.32.1, and 2.33.1, and against
+  a `CPython==3.9.*` project, asserting that Pyrefly checks it as Python 3.9. The release workflow
+  publishes nothing if any of these jobs fails.
 - Maintenance: `build-support/bin/generate_known_versions.py` now manages the pins.
   `--write` only adds pins (stable releases up to the default, skipping pre-releases and denylisted
   versions) and never rewrites existing ones. `--check` verifies only the shipped pins (checksums,
   default pinned, order, nothing denylisted), so new upstream releases or backports never fail it.
   `--check-upstream` lists stable releases that are neither pinned nor denylisted. `--remove` is
-  the only way to drop a version, and `--list-versions` prints the supported set. `--write` and
-  `--remove` edit `subsystems.py` line by line, leaving comments and formatting untouched, and
-  denylist reasons are written as single-line UTF-8 literals in `ruff format`'s quote style.
+  the only way to drop a version, `--list-versions` prints the supported set, and
+  `--default-version` prints the default. `--write` and `--remove` edit `subsystems.py` line by
+  line, leaving comments and formatting untouched, and denylist reasons are written as single-line
+  UTF-8 literals in `ruff format`'s quote style.
   Failures print a single `error: ...` line (with file and line where relevant), never a
   traceback. The script sends the GitHub token only to `api.github.com`, rejects malformed `.sha256` sidecars,
   and retries transient network failures, including downloads cut off mid-body.
+- Maintenance: the repo now develops, tests, and builds releases on Pants 2.33.1 (was 2.32.0). PR
+  CI smoke-tests the latest patch of a subset of the supported minors: 2.27.1, 2.31.0, 2.32.1, and
+  2.33.1. The supported Pants range (2.27–2.33) and the published wheel's requirements are
+  unchanged.
 
 ## 1.0.0 (2026-08-13)
 
