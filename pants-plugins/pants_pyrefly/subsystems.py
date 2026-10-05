@@ -192,7 +192,7 @@ class Pyrefly(TemplatedExternalTool):
             """
             Path to a Pyrefly baseline JSON file. When set, `pants check` reports only type errors
             introduced *after* the baseline was taken — handy for adopting Pyrefly on code that
-            already has errors. Create or refresh it with `pants pyrefly-update-baseline`.
+            already has errors. Create or refresh it with `pants pyrefly-update-baseline ::`.
             """
         ),
     )

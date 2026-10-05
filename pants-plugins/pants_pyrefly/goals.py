@@ -52,6 +52,7 @@ from pants_pyrefly.rules import (
     _setup_pyrefly_process,
     _unstage_digest,
     pyrefly_determine_partitions,
+    validate_pyrefly_args,
 )
 from pants_pyrefly.subsystems import Pyrefly
 
@@ -91,11 +92,12 @@ async def pyrefly_update_baseline(
             softwrap(
                 """
                 Set `[pyrefly].baseline` to the path where the baseline file should be written,
-                then re-run `pants pyrefly-update-baseline`.
+                then re-run `pants pyrefly-update-baseline ::`.
                 """
             )
         )
         return PyreflyUpdateBaseline(exit_code=1)
+    validate_pyrefly_args(pyrefly)
 
     field_sets = tuple(
         PyreflyFieldSet.create(tgt)
