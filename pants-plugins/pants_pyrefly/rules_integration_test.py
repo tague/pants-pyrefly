@@ -1008,3 +1008,30 @@ def test_missing_import_hint_names_real_source_roots_json(rule_runner: PythonRul
     assert all(_search_path_overrides(h) == [[".", "lib", "src/python"]] for h in hints), hints
     assert {e["path"] for e in errors} == {"src/python/app/f.py", "scripts/tool.py"}
 
+
+def test_update_baseline_full_format_description_names_real_source_roots(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # Pyrefly < 1.3 writes the full-format baseline, whose `description` is the error's whole text,
+    # hints included. It must name the real source roots, not the sandbox or the re-staged roots,
+    # and gating on it must still work.
+    targets = _three_root_targets(rule_runner)
+    version_args = [*_THREE_ROOT_ARGS, "--pyrefly-version=1.2.0"]
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=[*version_args, "--pyrefly-baseline=bl.json", "src/python/app:", "scripts:"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        raw = fh.read()
+    assert _SYNTHETIC_ROOT.search(raw) is None, raw
+    assert "pants-sandbox-" not in raw, raw
+    hints = [e["description"] for e in json.loads(raw)["errors"] if e["name"] == "missing-import"]
+    assert len(hints) == 2
+    assert all(_search_path_overrides(h) == [[".", "lib", "src/python"]] for h in hints), hints
+
+    gated = run_pyrefly(
+        rule_runner, targets, extra_args=[*version_args, "--pyrefly-baseline=bl.json"]
+    )
+    assert gated[0].exit_code == 0
