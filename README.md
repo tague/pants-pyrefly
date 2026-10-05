@@ -108,6 +108,31 @@ baseline = "build-support/pyrefly-baseline.json"
 Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
 Pyrefly's own (lenient by design, so it survives code churn).
 
+Pants runs Pyrefly once per partition (resolve and interpreter constraints), and each run gets only
+the baseline entries for the files it checks. Checking a subset of the repo therefore never trips
+over entries for files outside it.
+
+**Catching stale entries (Pyrefly 1.3+).** To fail `check` when the baseline holds entries for
+errors that are gone, add Pyrefly's `--error-stale-baseline`:
+
+```toml
+[pyrefly]
+baseline = "build-support/pyrefly-baseline.json"
+args = ["--error-stale-baseline"]
+```
+
+An entry is stale when its file is checked and no longer has that error, or when its file no longer
+exists. A stale entry fails the partition that checks its file. Stale entries for deleted files are
+reported by one partition (the first). Pyrefly prints only a count, not the entries. To clean them
+up, run `pants pyrefly-update-baseline`. The goal ignores `--error-stale-baseline`, so it can stay in
+`[pyrefly].args`.
+
+Pyrefly's `--prune-baseline` (which rewrites the baseline in place) is not supported in
+`[pyrefly].args`: `check` and `pyrefly-update-baseline` fail with a `PyreflyArgsError` that says so.
+Under Pants it would only prune a temporary copy, and `check` never writes to your repo. Use
+`pants pyrefly-update-baseline` instead. It regenerates the whole baseline from the current errors,
+so stale entries are dropped. Unlike `--prune-baseline`, it also records any new errors.
+
 **Prefer inline suppressions?** `pants pyrefly-suppress ::` instead rewrites the targeted files in
 place, adding `# pyrefly: ignore` on each current error (Pyrefly's `suppress`); delete them as you
 fix, or run `pants pyrefly-suppress --pyrefly-suppress-remove-unused ::` to strip stale ones. An

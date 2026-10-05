@@ -42,6 +42,23 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   [pyrefly].version to a supported release (<default>).` instead of Pants's generic
   `UnknownVersion`. Supplying your own `[pyrefly].known_versions` entry for it still works. The
   denylist is empty in this release.
+- **Fixed: Pyrefly 1.3's baseline flags in `[pyrefly].args`.**
+  - **`--error-stale-baseline` now works.** Before, every partition received the whole merged
+    baseline. Inside a partition's sandbox, entries for files checked by other partitions point
+    at paths that do not exist, so Pyrefly reported them as stale. `check` then failed every
+    partition even when nothing was stale, and also failed when checking a subset such as
+    `pants check src/a::`. Each partition now gets only the entries for its own files. A truly
+    stale entry fails only the partition that checks its file. Entries for deleted files are still
+    reported as stale, once, by the first partition. Without the flag, the same errors are gated
+    as before; an entry only ever matched errors in its own file.
+  - **`pants pyrefly-update-baseline` ignores `--error-stale-baseline`.** Before, it failed with
+    exit code 2, because Pyrefly rejects the flag alongside `--update-baseline`.
+  - **`--prune-baseline` now fails fast.** `check` and `pyrefly-update-baseline` exit with a
+    `PyreflyArgsError` that names `pants pyrefly-update-baseline`. Before, `check` passed and the
+    baseline file was silently left unchanged, because Pyrefly pruned a temporary copy in the
+    sandbox; `pyrefly-update-baseline` failed with exit code 2. When `check` fails on stale
+    entries, Pyrefly's "rerun with `--prune-baseline`" hint now says to run
+    `pants pyrefly-update-baseline` instead.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
