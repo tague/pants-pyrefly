@@ -749,6 +749,35 @@ def test_update_baseline_ignores_error_stale_baseline(rule_runner: PythonRuleRun
         assert {error["path"] for error in json.load(fh)["errors"]} == {"src/a/f.py"}
 
 
+_PRUNE_ERROR = "`--prune-baseline` in `[pyrefly].args` is not supported"
+
+
+def test_prune_baseline_rejected_by_check(rule_runner: PythonRuleRunner) -> None:
+    # `--prune-baseline` would prune a sandbox copy and silently leave the user's file unchanged.
+    targets = _write_two_partition_project(rule_runner, ["src/a/f.py", "src/b/g.py"])
+    with pytest.raises(ExecutionError) as excinfo:
+        run_pyrefly(
+            rule_runner,
+            targets,
+            extra_args=["--pyrefly-baseline=bl.json", "--pyrefly-args=--prune-baseline"],
+        )
+    message = str(excinfo.value)
+    assert "PyreflyArgsError" in message
+    assert _PRUNE_ERROR in message
+    assert "pants pyrefly-update-baseline" in message
+
+
+def test_prune_baseline_rejected_by_update_baseline(rule_runner: PythonRuleRunner) -> None:
+    _write_two_partition_project(rule_runner, ["src/a/f.py", "src/b/g.py"])
+    with pytest.raises(ExecutionError) as excinfo:
+        rule_runner.run_goal_rule(
+            PyreflyUpdateBaseline,
+            args=["--pyrefly-baseline=bl.json", "--pyrefly-args=--prune-baseline", "src::"],
+            env_inherit=_ENV_INHERIT,
+        )
+    assert _PRUNE_ERROR in str(excinfo.value)
+
+
 def test_lsp_config_respects_pyproject(rule_runner: PythonRuleRunner) -> None:
     # If Pyrefly config already lives in `pyproject.toml [tool.pyrefly]`, the goal must NOT write a
     # shadowing `pyrefly.toml` (a standalone file takes precedence and would silently override it).

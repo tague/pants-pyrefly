@@ -172,10 +172,35 @@ def _has_flag(args: Iterable[str], flag: str) -> bool:
     return any(_is_flag(arg, flag) for arg in args)
 
 
-# Pyrefly's `--error-stale-baseline` failure says to rerun with `--prune-baseline`, which under
-# Pants would only prune a sandbox copy; rewrite that advice in `check` output.
+# Pyrefly's `--error-stale-baseline` failure says to rerun with `--prune-baseline`, which Pants
+# rejects; rewrite that advice in `check` output.
 _PYREFLY_PRUNE_HINT = f"rerun with `{_PRUNE_BASELINE}` to update it"
 _PANTS_PRUNE_HINT = "run `pants pyrefly-update-baseline` to update it"
+
+
+class PyreflyArgsError(Exception):
+    """`[pyrefly].args` contains a Pyrefly flag that cannot work under Pants."""
+
+
+def validate_pyrefly_args(pyrefly: Pyrefly) -> None:
+    """Fail fast on `[pyrefly].args` that would silently do nothing under Pants.
+
+    `--prune-baseline` rewrites the `--baseline` file in place. Pyrefly runs in a sandbox on a
+    per-partition copy of the baseline, so the pruned copy would be discarded and the user's file
+    would never change. (`check` never writes to the workspace anyway, by Pants convention.)
+    """
+    if _has_flag(pyrefly.args, _PRUNE_BASELINE):
+        raise PyreflyArgsError(
+            softwrap(
+                f"""
+                `{_PRUNE_BASELINE}` in `[pyrefly].args` is not supported: Pyrefly would prune a
+                temporary copy of the baseline inside the Pants sandbox, and `[pyrefly].baseline`
+                would never change. Remove it from `[pyrefly].args`, then run
+                `pants pyrefly-update-baseline` to regenerate the baseline, which drops stale
+                entries (it also records any current errors).
+                """
+            )
+        )
 
 
 def _root_covers(root: str, dir_path: str) -> bool:
@@ -734,7 +759,7 @@ async def pyrefly_typecheck_partition(
     if invocation.synth_root_to_real:
         # Pyrefly reported synthetic re-staged paths (`__pyrefly_root_<n>/…`); translate diagnostics
         # back to real repo paths before surfacing them to the user. Also point Pyrefly's stale-
-        # baseline hint at the goal that refreshes the real baseline file under Pants.
+        # baseline hint at the goal that works under Pants (see `validate_pyrefly_args`).
 
         def rewrite(output: bytes) -> bytes:
             text = _remap_text(output.decode(errors="replace"), invocation.synth_root_to_real)
@@ -755,6 +780,7 @@ async def pyrefly_typecheck_partition(
 async def pyrefly_typecheck(request: PyreflyRequest, pyrefly: Pyrefly) -> CheckResults:
     if pyrefly.skip:
         return CheckResults([], checker_name=request.tool_name)
+    validate_pyrefly_args(pyrefly)
 
     partitions = await pyrefly_determine_partitions(request, **implicitly())
     partitioned_results = await concurrently(
