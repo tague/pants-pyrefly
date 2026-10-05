@@ -6,6 +6,10 @@
 # passes and a broken file fails. This exercises the version-conditional rules-API shim end to
 # end on whatever PANTS_VERSION is requested, without needing per-version dev lockfiles.
 #
+# Everything Pants executes lands in the script's own work directory: each run gets its own
+# `--local-execution-root-dir` there (sandboxes and `immutable_inputs*`), so cleanup is removing
+# that one directory and nothing is left in $TMPDIR.
+#
 # Usage: PANTS_VERSION=2.27.1 build-support/ci/smoke_test.sh
 set -euo pipefail
 
@@ -14,13 +18,21 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLUGIN_SRC="${REPO_ROOT}/pants-plugins/pants_pyrefly"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pyrefly-smoke.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+PROJECT="${WORK}/project"
+cleanup() {
+  local status=$?
+  # Pants makes immutable inputs (the Pyrefly binary) read-only; make them deletable first.
+  chmod -R u+w "$WORK" 2>/dev/null || true
+  rm -rf "$WORK"
+  exit "$status"
+}
+trap cleanup EXIT
 
-mkdir -p "$WORK/pants-plugins/pants_pyrefly" "$WORK/src"
+mkdir -p "$PROJECT/pants-plugins/pants_pyrefly" "$PROJECT/src"
 cp "$PLUGIN_SRC"/{__init__,subsystems,skip_field,rules,register,goals}.py \
-  "$WORK/pants-plugins/pants_pyrefly/"
+  "$PROJECT/pants-plugins/pants_pyrefly/"
 
-cat > "$WORK/pants.toml" <<EOF
+cat > "$PROJECT/pants.toml" <<EOF
 [GLOBAL]
 pants_version = "${PANTS_VERSION}"
 pythonpath = ["%(buildroot)s/pants-plugins"]
@@ -33,17 +45,27 @@ interpreter_constraints = ["CPython>=3.11,<3.15"]
 indexes = ["https://pypi.org/simple/"]
 EOF
 
-printf 'def add(a: int, b: int) -> int:\n    return a + b\n' > "$WORK/src/good.py"
-printf 'import module_that_truly_does_not_exist_pyrefly_smoke\n' > "$WORK/src/bad.py"
-echo 'python_sources()' > "$WORK/src/BUILD"
+printf 'def add(a: int, b: int) -> int:\n    return a + b\n' > "$PROJECT/src/good.py"
+printf 'import module_that_truly_does_not_exist_pyrefly_smoke\n' > "$PROJECT/src/bad.py"
+echo 'python_sources()' > "$PROJECT/src/BUILD"
 
-cd "$WORK"
+cd "$PROJECT"
+
+RUN=0
+# Run Pants in a fresh execution root under $WORK, passing its output and status through.
+run_pants() {
+  local exec_root
+  RUN=$((RUN + 1))
+  exec_root="${WORK}/exec-${RUN}"
+  mkdir -p "$exec_root"
+  pants --no-pantsd "--local-execution-root-dir=${exec_root}" "$@"
+}
 
 echo "== [Pants ${PANTS_VERSION}] good.py must PASS =="
-pants --no-pantsd check src/good.py
+run_pants check src/good.py
 
 echo "== [Pants ${PANTS_VERSION}] bad.py must FAIL =="
-if pants --no-pantsd check src/bad.py; then
+if run_pants check src/bad.py; then
   echo "SMOKE FAILED: expected 'check' to fail on bad.py, but it passed" >&2
   exit 1
 fi
