@@ -175,7 +175,7 @@ def _has_flag(args: Iterable[str], flag: str) -> bool:
 # Pyrefly's `--error-stale-baseline` failure says to rerun with `--prune-baseline`, which Pants
 # rejects; rewrite that advice in `check` output.
 _PYREFLY_PRUNE_HINT = f"rerun with `{_PRUNE_BASELINE}` to update it"
-_PANTS_PRUNE_HINT = "run `pants pyrefly-update-baseline` to update it"
+_PANTS_PRUNE_HINT = "run `pants pyrefly-update-baseline ::` to update it"
 
 
 class PyreflyArgsError(Exception):
@@ -196,8 +196,8 @@ def validate_pyrefly_args(pyrefly: Pyrefly) -> None:
                 `{_PRUNE_BASELINE}` in `[pyrefly].args` is not supported: Pyrefly would prune a
                 temporary copy of the baseline inside the Pants sandbox, and `[pyrefly].baseline`
                 would never change. Remove it from `[pyrefly].args`, then run
-                `pants pyrefly-update-baseline` to regenerate the baseline, which drops stale
-                entries (it also records any current errors).
+                `pants pyrefly-update-baseline ::` to regenerate the baseline from every target,
+                which drops stale entries (it also records any current errors).
                 """
             )
         )
@@ -642,7 +642,7 @@ async def _setup_pyrefly_process(
                 softwrap(
                     f"""
                     `[pyrefly].baseline` is set to `{pyrefly.baseline}`, but that file does not
-                    exist. Run `pants pyrefly-update-baseline` to create it; checking without a
+                    exist. Run `pants pyrefly-update-baseline ::` to create it; checking without a
                     baseline for now.
                     """
                 )

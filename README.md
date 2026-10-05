@@ -78,7 +78,7 @@ pants check path/to/dir::      # type-check a subtree
 | `only` | `--pyrefly-only` | Only report these error kinds (e.g. `bad-assignment`); handy for triage. |
 | `config` | `--pyrefly-config` | Path to a `pyrefly.toml` / `pyproject.toml` (disables discovery). |
 | `config_discovery` | `--[no-]pyrefly-config-discovery` | Auto-discover `pyrefly.toml` / `[tool.pyrefly]`. |
-| `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline`. |
+| `baseline` | `--pyrefly-baseline` | Path to a Pyrefly baseline JSON; `check` then reports only errors *new* since the baseline. Generate it with `pants pyrefly-update-baseline ::`. |
 | `exclude_source_roots` | `--pyrefly-exclude-source-roots` (advanced) | Source roots to omit from `--search-path`. Rarely needed — nested roots are deduped automatically (see below); use this only to force-drop a root the automatic logic keeps. |
 | `version` / `known_versions` / `url_template` | (advanced) | Pin or override the downloaded Pyrefly binary. Any [supported Pyrefly version](#supported-pyrefly-versions) needs only `version`. |
 
@@ -105,12 +105,17 @@ Configure the path (and commit the baseline file):
 baseline = "build-support/pyrefly-baseline.json"
 ```
 
-Re-run `pants pyrefly-update-baseline` after fixing errors, or to refresh it. Baseline matching is
+Re-run `pants pyrefly-update-baseline ::` after fixing errors, or to refresh it. Baseline matching is
 Pyrefly's own (lenient by design, so it survives code churn).
 
 Pants runs Pyrefly once per partition (resolve and interpreter constraints), and each run gets only
-the baseline entries for the files it checks. Checking a subset of the repo therefore never trips
-over entries for files outside it.
+the baseline entries for the files it checks. Entries for files outside the run's targets therefore
+never suppress anything there. They don't count as stale either, except for entries whose files
+were deleted (see below).
+
+`pants pyrefly-update-baseline` rewrites the whole baseline file from the targets you give it, and
+only those. A subset run such as `pants pyrefly-update-baseline src/b::` drops every entry for
+files outside `src/b`, so always pass `::` to refresh the baseline.
 
 **Catching stale entries (Pyrefly 1.3+).** To fail `check` when the baseline holds entries for
 errors that are gone, add Pyrefly's `--error-stale-baseline`:
@@ -122,16 +127,32 @@ args = ["--error-stale-baseline"]
 ```
 
 An entry is stale when its file is checked and no longer has that error, or when its file no longer
-exists. A stale entry fails the partition that checks its file. Stale entries for deleted files are
-reported by one partition (the first). Pyrefly prints only a count, not the entries. To clean them
-up, run `pants pyrefly-update-baseline`. The goal ignores `--error-stale-baseline`, so it can stay in
+exists. A stale entry fails the partition that checks its file. Entries for deleted files belong to
+no partition, so the first partition of every run carries them, even a subset run: `pants check
+src/b::` fails on a stale entry for a deleted file anywhere in the repo, as plain Pyrefly does when
+given a list of files. Pyrefly prints only a count, not the entries. To clean them up, run
+`pants pyrefly-update-baseline ::`. The goal ignores `--error-stale-baseline`, so it can stay in
 `[pyrefly].args`.
+
+**Limitation: files checked by more than one partition.** Baseline entries are keyed by file path
+only. When one file is checked in several partitions (for example, `parametrize` over interpreter
+constraints or resolves) and an error occurs in only some of them, the partitions without the error
+see its entry as stale. `--error-stale-baseline` then fails on every run, and
+`pants pyrefly-update-baseline ::` writes the entry straight back. For an error that depends on the
+Python version or resolve, use an inline suppression on that line instead of a baseline entry:
+
+```python
+from typing import override  # pyrefly: ignore[missing-module-attribute]
+```
+
+Partitions where the error does not occur ignore the unused comment (by default).
 
 Pyrefly's `--prune-baseline` (which rewrites the baseline in place) is not supported in
 `[pyrefly].args`: `check` and `pyrefly-update-baseline` fail with a `PyreflyArgsError` that says so.
-Under Pants it would only prune a temporary copy, and `check` never writes to your repo. Use
-`pants pyrefly-update-baseline` instead. It regenerates the whole baseline from the current errors,
-so stale entries are dropped. Unlike `--prune-baseline`, it also records any new errors.
+Under Pants it would only prune a temporary copy, and `check` never writes to your repo. Run
+`pants pyrefly-update-baseline ::` instead. It rewrites the whole baseline from the current errors
+in the targets given (all of them, with `::`), so stale entries are dropped. Unlike
+`--prune-baseline`, it also records any new errors.
 
 **Prefer inline suppressions?** `pants pyrefly-suppress ::` instead rewrites the targeted files in
 place, adding `# pyrefly: ignore` on each current error (Pyrefly's `suppress`); delete them as you

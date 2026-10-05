@@ -92,7 +92,7 @@ async def pyrefly_update_baseline(
             softwrap(
                 """
                 Set `[pyrefly].baseline` to the path where the baseline file should be written,
-                then re-run `pants pyrefly-update-baseline`.
+                then re-run `pants pyrefly-update-baseline ::`.
                 """
             )
         )

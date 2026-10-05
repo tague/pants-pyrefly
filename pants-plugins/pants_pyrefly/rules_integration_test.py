@@ -716,7 +716,7 @@ def test_error_stale_baseline_multi_partition(rule_runner: PythonRuleRunner) -> 
     failed = next(result for result in stale if result.exit_code == 1)
     output = failed.stdout + failed.stderr
     assert "unused suppression" in output
-    assert "run `pants pyrefly-update-baseline` to update it" in output
+    assert "run `pants pyrefly-update-baseline ::` to update it" in output
     # Without the flag, the stale entry is harmless and both partitions pass, as before.
     gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
     assert all(result.exit_code == 0 for result in gated)
@@ -764,7 +764,7 @@ def test_prune_baseline_rejected_by_check(rule_runner: PythonRuleRunner) -> None
     message = str(excinfo.value)
     assert "PyreflyArgsError" in message
     assert _PRUNE_ERROR in message
-    assert "pants pyrefly-update-baseline" in message
+    assert "`pants pyrefly-update-baseline ::`" in message
 
 
 def test_prune_baseline_rejected_by_update_baseline(rule_runner: PythonRuleRunner) -> None:

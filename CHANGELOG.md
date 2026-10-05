@@ -49,16 +49,22 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
     partition even when nothing was stale, and also failed when checking a subset such as
     `pants check src/a::`. Each partition now gets only the entries for its own files. A truly
     stale entry fails only the partition that checks its file. Entries for deleted files are still
-    reported as stale, once, by the first partition. Without the flag, the same errors are gated
-    as before; an entry only ever matched errors in its own file.
+    reported as stale, once per run, by the first partition, so a subset run can fail on them
+    too. Without the flag, the same errors are gated as before; an entry only ever matched errors
+    in its own file.
+  - **Known limitation:** baseline entries are keyed by path only. A file checked by several
+    partitions (e.g. `parametrize` over interpreter constraints) with an error in only some of
+    them keeps failing `--error-stale-baseline`. Use an inline
+    `# pyrefly: ignore[<error-kind>]` for such errors. See the README.
   - **`pants pyrefly-update-baseline` ignores `--error-stale-baseline`.** Before, it failed with
     exit code 2, because Pyrefly rejects the flag alongside `--update-baseline`.
   - **`--prune-baseline` now fails fast.** `check` and `pyrefly-update-baseline` exit with a
-    `PyreflyArgsError` that names `pants pyrefly-update-baseline`. Before, `check` passed and the
+    `PyreflyArgsError` that names `pants pyrefly-update-baseline ::`. Before, `check` passed and the
     baseline file was silently left unchanged, because Pyrefly pruned a temporary copy in the
     sandbox; `pyrefly-update-baseline` failed with exit code 2. When `check` fails on stale
     entries, Pyrefly's "rerun with `--prune-baseline`" hint now says to run
-    `pants pyrefly-update-baseline` instead.
+    `pants pyrefly-update-baseline ::` instead. The README now warns that update-baseline rewrites
+    the whole file from only the targets given, so a subset run drops all other entries.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
