@@ -15,6 +15,18 @@
 # Usage: PANTS_VERSION=2.27.1 build-support/ci/smoke_test.sh
 set -euo pipefail
 
+# Run Pants with a controlled configuration, so nothing from the developer's setup leaks into the
+# throwaway project (e.g. `dynamic_ui = true` drops Pyrefly's diagnostics from the captured output
+# on some Pants versions). Every run passes `--no-pantsrc` (no `/etc/pantsrc`, `~/.pants.rc`, or
+# `.pants.rc` is read) and `--no-dynamic-ui`, and every inherited `PANTS_*` variable is unset here,
+# for the whole script, except two that configure the scie-pants launcher rather than Pants:
+# PANTS_VERSION (the Pants version to run) and PANTS_BOOTSTRAP_* (download mirrors and timeouts).
+# Unsetting once up front is simpler than an `env` allowlist on every call, and leaves everything
+# else (PATH, HOME, TMPDIR, SCIE_*, caches) as it is.
+while IFS= read -r var; do
+  unset "$var"
+done < <(compgen -e | grep -E '^PANTS_' | grep -Ev '^(PANTS_VERSION|PANTS_BOOTSTRAP_.*)$' || true)
+
 PANTS_VERSION="${PANTS_VERSION:?set PANTS_VERSION, e.g. 2.27.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLUGIN_SRC="${REPO_ROOT}/pants-plugins/pants_pyrefly"
@@ -68,7 +80,8 @@ run_pants() {
   RUN=$((RUN + 1))
   exec_root="${WORK}/exec-${RUN}"
   mkdir -p "$exec_root"
-  OUT="$(pants --no-pantsd "--local-execution-root-dir=${exec_root}" "$@" 2>&1)" ||
+  OUT="$(pants --no-pantsd --no-pantsrc --no-dynamic-ui \
+    "--local-execution-root-dir=${exec_root}" "$@" 2>&1)" ||
     status=$?
   return "$status"
 }

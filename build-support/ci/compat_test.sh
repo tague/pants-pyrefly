@@ -41,6 +41,18 @@
 #                                  release must make the script fail on the version assertion.
 set -euo pipefail
 
+# Run Pants with a controlled configuration, so nothing from the developer's setup leaks into the
+# throwaway project (e.g. `dynamic_ui = true` drops Pyrefly's diagnostics from the captured output
+# on some Pants versions). Every run passes `--no-pantsrc` (no `/etc/pantsrc`, `~/.pants.rc`, or
+# `.pants.rc` is read) and `--no-dynamic-ui`, and every inherited `PANTS_*` variable is unset here,
+# for the whole script, except two that configure the scie-pants launcher rather than Pants:
+# PANTS_VERSION (the Pants version to run) and PANTS_BOOTSTRAP_* (download mirrors and timeouts).
+# Unsetting once up front is simpler than an `env` allowlist on every call, and leaves everything
+# else (PATH, HOME, TMPDIR, SCIE_*, caches) as it is.
+while IFS= read -r var; do
+  unset "$var"
+done < <(compgen -e | grep -E '^PANTS_' | grep -Ev '^(PANTS_VERSION|PANTS_BOOTSTRAP_.*)$' || true)
+
 PYREFLY_VERSION="${1:?usage: compat_test.sh <pyrefly-version>}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PLUGIN_SRC="${REPO_ROOT}/pants-plugins/pants_pyrefly"
@@ -104,7 +116,7 @@ run_pants() {
   RUN=$((RUN + 1))
   EXEC_ROOT="${WORK}/exec-${RUN}"
   mkdir -p "$EXEC_ROOT"
-  OUT="$(pants --no-pantsd --no-local-cache --keep-sandboxes=always \
+  OUT="$(pants --no-pantsd --no-pantsrc --no-dynamic-ui --no-local-cache --keep-sandboxes=always \
     "--local-execution-root-dir=${EXEC_ROOT}" \
     "--pyrefly-version=${PANTS_PYREFLY_VERSION_ARG}" "$@" 2>&1)" ||
     status=$?
