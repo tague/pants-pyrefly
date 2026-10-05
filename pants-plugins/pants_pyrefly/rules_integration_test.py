@@ -27,6 +27,8 @@ from pants_pyrefly.rules import (
     PyreflyFieldSet,
     PyreflyRequest,
     _dedupe_search_path_roots,
+    _filter_baseline_entries,
+    _has_flag,
     _plan_restage,
     _real_prefix,
     _remap_path,
@@ -619,6 +621,132 @@ def test_baseline_gating_compact_multi_partition(rule_runner: PythonRuleRunner) 
     gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
     assert len(gated) == 2
     assert all(result.exit_code == 0 for result in gated)
+
+
+def test_filter_baseline_entries_scopes_to_partition() -> None:
+    # Pure: only this partition's entries survive (remapped to staged paths), orphans (files that no
+    # longer exist) pass through at their real path, and other partitions' entries are dropped.
+    # Works the same for the compact (>= 1.3) and full entry formats, which both carry `path`.
+    compact = {"column": 10, "path": "src/a/f.py", "name": "bad-assignment"}
+    full = {"line": 1, "column": 10, "path": "src/a/h.py", "code": -2, "name": "bad-assignment"}
+    other = {"column": 10, "path": "src/b/g.py", "name": "bad-assignment"}
+    orphan = {"column": 10, "path": "src/gone.py", "name": "bad-assignment"}
+    pathless = {"name": "bad-assignment"}
+    kept = _filter_baseline_entries(
+        [compact, full, other, orphan, pathless],
+        {"src/a/f.py": "__pyrefly_root_0/a/f.py", "src/a/h.py": "__pyrefly_root_0/a/h.py"},
+        frozenset({"src/gone.py"}),
+    )
+    assert kept == [
+        {**compact, "path": "__pyrefly_root_0/a/f.py"},
+        {**full, "path": "__pyrefly_root_0/a/h.py"},
+        orphan,
+        pathless,
+    ]
+    # Without orphans (every partition but one, or no `--error-stale-baseline`), they are dropped.
+    assert orphan not in _filter_baseline_entries([orphan], {}, frozenset())
+
+
+def test_has_flag() -> None:
+    assert _has_flag(("--a", "--prune-baseline"), "--prune-baseline")
+    assert _has_flag(("--prune-baseline=true",), "--prune-baseline")
+    assert not _has_flag(("--prune-baseline-x",), "--prune-baseline")
+
+
+def _write_two_partition_project(
+    rule_runner: PythonRuleRunner, baseline_paths: list[str]
+) -> list[Target]:
+    """Two files with one `bad-assignment` each, in two partitions (3.11 and 3.12), plus a compact
+    baseline `bl.json` with an entry for each path in `baseline_paths`. Returns the targets."""
+
+    def entry(path: str) -> dict:
+        return {
+            "column": 10,
+            "path": path,
+            "name": "bad-assignment",
+            "concise_description": "`Literal['bad']` is not assignable to `int`",
+            "severity": "error",
+        }
+
+    rule_runner.write_files(
+        {
+            "src/a/f.py": 'x: int = "bad"\n',
+            "src/a/BUILD": "python_sources(interpreter_constraints=['==3.11.*'])",
+            "src/b/g.py": 'y: int = "bad"\n',
+            "src/b/BUILD": "python_sources(interpreter_constraints=['==3.12.*'])",
+            "pyrefly.toml": 'preset = "legacy"\n',
+            "bl.json": json.dumps({"errors": [entry(p) for p in baseline_paths]}),
+        }
+    )
+    return [
+        rule_runner.get_target(Address("src/a", relative_file_path="f.py")),
+        rule_runner.get_target(Address("src/b", relative_file_path="g.py")),
+    ]
+
+
+def _exit_codes_by_python(results: tuple[CheckResult, ...]) -> dict[str, int]:
+    """Map each partition's Python minor ("3.11"/"3.12") to its exit code."""
+    codes = {}
+    for result in results:
+        description = result.partition_description or ""
+        minor = "3.11" if "3.11" in description else "3.12" if "3.12" in description else "?"
+        codes[minor] = result.exit_code
+    return codes
+
+
+_STALE_ARGS = ["--pyrefly-baseline=bl.json", "--pyrefly-args=--error-stale-baseline"]
+
+
+def test_error_stale_baseline_multi_partition(rule_runner: PythonRuleRunner) -> None:
+    # Each partition must see only its own baseline entries: before the fix, every partition got the
+    # whole merged baseline, and Pyrefly reported the other partition's entries as stale (their
+    # real paths do not exist in the sandbox), so this failed with nothing stale at all.
+    targets = _write_two_partition_project(rule_runner, ["src/a/f.py", "src/b/g.py"])
+    assert _exit_codes_by_python(run_pyrefly(rule_runner, targets, extra_args=_STALE_ARGS)) == {
+        "3.11": 0,
+        "3.12": 0,
+    }
+    # Checking one partition alone is not stale either (the other entry is out of scope).
+    assert run_pyrefly(rule_runner, targets[:1], extra_args=_STALE_ARGS)[0].exit_code == 0
+
+    # Fix the error in `src/b/g.py`: its entry is now truly stale, and only that partition fails.
+    rule_runner.write_files({"src/b/g.py": "y: int = 1\n"})
+    stale = run_pyrefly(rule_runner, targets, extra_args=_STALE_ARGS)
+    assert _exit_codes_by_python(stale) == {"3.11": 0, "3.12": 1}
+    failed = next(result for result in stale if result.exit_code == 1)
+    output = failed.stdout + failed.stderr
+    assert "unused suppression" in output
+    assert "run `pants pyrefly-update-baseline` to update it" in output
+    # Without the flag, the stale entry is harmless and both partitions pass, as before.
+    gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
+    assert all(result.exit_code == 0 for result in gated)
+
+
+def test_error_stale_baseline_deleted_file_reported_once(rule_runner: PythonRuleRunner) -> None:
+    # An entry for a file that no longer exists belongs to no partition; it is still stale (as in
+    # plain Pyrefly), and is reported by exactly one partition rather than by every partition.
+    targets = _write_two_partition_project(
+        rule_runner, ["src/a/f.py", "src/b/g.py", "src/deleted.py"]
+    )
+    results = run_pyrefly(rule_runner, targets, extra_args=_STALE_ARGS)
+    assert sorted(result.exit_code for result in results) == [0, 1]
+    gated = run_pyrefly(rule_runner, targets, extra_args=["--pyrefly-baseline=bl.json"])
+    assert all(result.exit_code == 0 for result in gated)
+
+
+def test_update_baseline_ignores_error_stale_baseline(rule_runner: PythonRuleRunner) -> None:
+    # `--error-stale-baseline` set in `[pyrefly].args` for `check` must not break regeneration
+    # (Pyrefly rejects it alongside `--update-baseline`). Regenerating drops the stale entry.
+    _write_two_partition_project(rule_runner, ["src/a/f.py", "src/b/g.py"])
+    rule_runner.write_files({"src/b/g.py": "y: int = 1\n"})
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=[*_STALE_ARGS, "src::"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        assert {error["path"] for error in json.load(fh)["errors"]} == {"src/a/f.py"}
 
 
 def test_lsp_config_respects_pyproject(rule_runner: PythonRuleRunner) -> None:
