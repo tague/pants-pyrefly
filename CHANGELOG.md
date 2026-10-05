@@ -69,12 +69,13 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   locations` hint listed the plugin's internal sandbox directories, e.g.
   `Search path override (from command line): ["__pyrefly_root_0", "__pyrefly_root_1"]`. It now
   lists the source roots they stand for, e.g. `[".", "src/python"]` (`.` is the build root), in
-  every `[pyrefly].output_format`. The same applies to the `description` field of baselines
-  written by `pants pyrefly-update-baseline` under Pyrefly older than 1.3, which also recorded the
-  absolute sandbox path and so changed on every regeneration; regenerate such a baseline once to
-  clean it up. Gating is unaffected, since Pyrefly does not match baseline entries on
-  `description`. Only the internal names the plugin generated for that run are rewritten, and only
-  as whole path segments, so user code or messages that merely contain such a name are left alone.
+  every `[pyrefly].output_format`, with or without `--color=always`. The same applies to the
+  `description` field of baselines written by `pants pyrefly-update-baseline` under Pyrefly older
+  than 1.3, which also recorded the absolute sandbox path and so changed on every regeneration;
+  regenerate such a baseline once to clean it up. Gating is unaffected, since Pyrefly does not
+  match baseline entries on `description`. Only the internal names the plugin generated for that
+  run are rewritten, and only as whole path segments, so user code or messages that merely
+  contain such a name are left alone.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and

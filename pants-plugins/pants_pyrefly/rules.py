@@ -380,21 +380,26 @@ def _remap_text(text: str, synth_root_to_real: FrozenDict[str, str]) -> str:
     `.` for the build root).
 
     Only the synthetic names generated for this invocation are rewritten, and only as whole path
-    segments: `__pyrefly_root_1` does not match inside `__pyrefly_root_10` or `my__pyrefly_root_1`.
+    segments: a name must not be preceded or followed by a word character, `.`, or `-`, so
+    `__pyrefly_root_1` is left alone in `__pyrefly_root_10`, `my__pyrefly_root_1`,
+    `a.__pyrefly_root_1`, and `__pyrefly_root_1.sub`. The one exception is a name directly after an
+    ANSI color code (`\x1b[...m`, e.g. under `--color=always`), whose final `m` would otherwise
+    look like part of a word; the code is kept as-is.
     """
     if not synth_root_to_real:
         return text
     # Longest name first, so no name can win over a longer one it prefixes.
     names = "|".join(re.escape(s) for s in sorted(synth_root_to_real, key=len, reverse=True))
-    # Not preceded by a name character or `.` (a segment start: line start, space, quote, `/`,
-    # `=`…); followed by `/` (a path under the root) or by anything that cannot continue a name.
-    pattern = re.compile(rf"(?<![\w.-])({names})(?:(/)|(?![\w-]))")
+    # Segment start: either an ANSI SGR sequence (any parameters, e.g. `\x1b[0m`, `\x1b[1;31m`,
+    # `\x1b[38;5;12m`), matched and put back, or no name character or `.` before the name. Segment
+    # end: `/` (a path under the root), or nothing that could continue a name.
+    pattern = re.compile(rf"(?:(\x1b\[[0-9;:]*m)|(?<![\w.-]))({names})(?:(/)|(?![\w.-]))")
 
     def to_real(match: re.Match[str]) -> str:
-        root = synth_root_to_real[match.group(1)]
-        if match.group(2):
-            return _real_prefix(root)
-        return "." if root in (".", "") else root
+        sgr, synth, slash = match.groups()
+        root = synth_root_to_real[synth]
+        real = _real_prefix(root) if slash else ("." if root in (".", "") else root)
+        return f"{sgr or ''}{real}"
 
     return pattern.sub(to_real, text)
 
