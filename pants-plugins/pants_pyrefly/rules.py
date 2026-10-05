@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import PurePath
@@ -369,10 +370,33 @@ def _real_prefix(root: str) -> str:
 
 
 def _remap_text(text: str, synth_root_to_real: FrozenDict[str, str]) -> str:
-    """Rewrite every `__pyrefly_root_<n>/…` path in `text` back to its real repo path."""
-    for synth, root in synth_root_to_real.items():
-        text = text.replace(f"{synth}/", _real_prefix(root))
-    return text
+    """Rewrite every synthetic root in Pyrefly's output `text` back to its real repo path.
+
+    Pyrefly names a synthetic root in two shapes: as the leading segment of a file path
+    (`__pyrefly_root_<n>/pkg/m.py`, e.g. an error location), and on its own (e.g. the
+    `Search path override` line of a missing-import hint, where it is the last segment of an
+    absolute sandbox path). The former maps to the file's real repo path (`src/python/pkg/m.py`;
+    the build root adds no prefix); the latter to the real source root itself (`src/python`, or
+    `.` for the build root).
+
+    Only the synthetic names generated for this invocation are rewritten, and only as whole path
+    segments: `__pyrefly_root_1` does not match inside `__pyrefly_root_10` or `my__pyrefly_root_1`.
+    """
+    if not synth_root_to_real:
+        return text
+    # Longest name first, so no name can win over a longer one it prefixes.
+    names = "|".join(re.escape(s) for s in sorted(synth_root_to_real, key=len, reverse=True))
+    # Not preceded by a name character or `.` (a segment start: line start, space, quote, `/`,
+    # `=`…); followed by `/` (a path under the root) or by anything that cannot continue a name.
+    pattern = re.compile(rf"(?<![\w.-])({names})(?:(/)|(?![\w-]))")
+
+    def to_real(match: re.Match[str]) -> str:
+        root = synth_root_to_real[match.group(1)]
+        if match.group(2):
+            return _real_prefix(root)
+        return "." if root in (".", "") else root
+
+    return pattern.sub(to_real, text)
 
 
 def _remap_path(path: str, synth_root_to_real: FrozenDict[str, str]) -> str:
