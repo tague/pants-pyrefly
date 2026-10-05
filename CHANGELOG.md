@@ -170,8 +170,8 @@ Initial release.
 - `pants pyrefly-coverage` reports overall type coverage (% of typable symbols typed), with an
   optional `--pyrefly-coverage-fail-under` threshold to ratchet/gate it.
 - Supports Pants `2.27`–`2.32` from a single codebase, via version-conditional imports for the
-  rules-API changes at 2.30 (`coarsened_targets` → `resolve_coarsened_targets`) and the
-  `CheckSubsystem.default_process_cache_scope` addition. Verified on 2.27 and 2.32.
+  rules-API change at 2.29 (`coarsened_targets` → `resolve_coarsened_targets`) and the
+  `CheckSubsystem.default_process_cache_scope` addition at 2.32. Verified on 2.27 and 2.32.
 - The published wheel is pure-Python (`Requires-Python: >=3.12`) and carries **no `pantsbuild.pants`
   dependency** (Pants provides itself at runtime, and is no longer on PyPI). It installs into any
   Pants on CPython 3.12+ (Pants 2.27, on CPython 3.11, uses the from-source install). Verified
