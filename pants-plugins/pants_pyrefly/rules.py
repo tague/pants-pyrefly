@@ -23,6 +23,7 @@ from pants.backend.python.util_rules.partition import (
     _partition_by_interpreter_constraints_and_resolve,
 )
 from pants.backend.python.util_rules.pex import Pex, PexRequest, create_pex, create_venv_pex
+from pants.backend.python.util_rules.pex_environment import find_pex_python
 from pants.backend.python.util_rules.pex_from_targets import RequirementsPexRequest
 from pants.backend.python.util_rules.pex_requirements import PexRequirements
 from pants.backend.python.util_rules.python_sources import (
@@ -595,6 +596,11 @@ async def _setup_pyrefly_process(
             )
         )
     )
+    # The venv's Python shim runs the venv out of the sandbox's `.cache/pex_root`, rebuilding it
+    # there if it is missing. Pants' own `VenvPexProcess` mounts the shared `pex_root` named cache
+    # at that path; we build our `Process` by hand, so mount it ourselves. Without it, every run
+    # rebuilds the entire third-party venv before Pyrefly starts.
+    pex_environment = await find_pex_python(**implicitly())
 
     is_check = subcommand == ("check",)
 
@@ -740,7 +746,10 @@ async def _setup_pyrefly_process(
         argv=tuple(argv),
         input_digest=input_digest,
         immutable_input_digests={tool_key: downloaded_pyrefly.digest},
-        append_only_caches=requirements_venv_pex.append_only_caches or {},
+        append_only_caches={
+            **pex_environment.in_sandbox(working_directory=None).append_only_caches,
+            **(requirements_venv_pex.append_only_caches or {}),
+        },
         output_files=output_files,
         description=f"Run Pyrefly on {pluralize(len(root_sources.snapshot.files), 'file')}.",
         level=LogLevel.DEBUG,

@@ -76,6 +76,14 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   match baseline entries on `description`. Only the internal names the plugin generated for that
   run are rewritten, and only as whole path segments, so user code or messages that merely
   contain such a name are left alone.
+- **Fixed: every Pyrefly run rebuilt the third-party venv.** Pyrefly finds your third-party
+  packages through a venv that Pants keeps in its shared `pex_root` named cache. The plugin did
+  not mount that cache into Pyrefly's sandbox, so each Pyrefly process (`check` and the
+  `pyrefly-*` goals that read your third-party packages) rebuilt the whole venv from scratch before
+  Pyrefly started, even when nothing had changed. The rebuild time grows with the size of the resolve, and with a large lockfile it
+  was most of the time `pants check` spent. The venv is now built once and reused, as it is for
+  Pants' own Python tools. Diagnostics are unchanged. A CI runner that starts with an empty
+  named-caches directory still builds the venv once per run.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and

@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest  # pants: no-infer-dep
@@ -34,11 +35,14 @@ from pants_pyrefly.rules import (
     _real_prefix,
     _remap_path,
     _remap_text,
+    _setup_pyrefly_process,
+    pyrefly_determine_partitions,
 )
 from pants_pyrefly import subsystems
 from pants_pyrefly.subsystems import Pyrefly
 
 from pants.backend.python import target_types_rules
+from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
 from pants.backend.python.target_types import (
     PythonRequirementTarget,
@@ -50,13 +54,32 @@ from pants.core.goals.check import CheckResult, CheckResults
 from pants.core.util_rules import config_files, external_tool, source_files
 from pants.engine.addresses import Address
 from pants.engine.internals.scheduler import ExecutionError
-from pants.engine.rules import QueryRule
+from pants.engine.platform import Platform
+from pants.engine.process import Process, ProcessCacheScope
+from pants.engine.rules import QueryRule, collect_rules, implicitly, rule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.util.frozendict import FrozenDict
 
 # Inherited so Pants can discover system interpreters and download the Pyrefly binary.
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
+
+
+@dataclass(frozen=True)
+class _FirstPyreflyProcess:
+    process: Process
+
+
+@rule
+async def _first_pyrefly_process(
+    request: PyreflyRequest, pyrefly: Pyrefly, platform: Platform, python_setup: PythonSetup
+) -> _FirstPyreflyProcess:
+    """Test-only: the `check` Process for the first partition, without running it."""
+    partitions = await pyrefly_determine_partitions(request, **implicitly())
+    invocation = await _setup_pyrefly_process(
+        partitions[0], pyrefly, platform, python_setup, cache_scope=ProcessCacheScope.SUCCESSFUL
+    )
+    return _FirstPyreflyProcess(invocation.process)
 
 
 def _remove_tree(path: Path) -> None:
@@ -101,7 +124,9 @@ def rule_runner(tmp_path: Path) -> Iterator[PythonRuleRunner]:
             *external_tool.rules(),
             *config_files.rules(),
             *source_files.rules(),
+            *collect_rules({"_first_pyrefly_process": _first_pyrefly_process}),
             QueryRule(CheckResults, (PyreflyRequest,)),
+            QueryRule(_FirstPyreflyProcess, (PyreflyRequest,)),
         ],
         target_types=[
             PythonSourcesGeneratorTarget,
@@ -353,6 +378,24 @@ def test_third_party_import_resolves(rule_runner: PythonRuleRunner) -> None:
     result = run_pyrefly(rule_runner, [tgt])
     assert len(result) == 1
     assert result[0].exit_code == 0
+
+
+def test_process_mounts_shared_pex_root(rule_runner: PythonRuleRunner) -> None:
+    # Pyrefly reads the third-party venv through a shim that runs it out of `.cache/pex_root`,
+    # rebuilding it there if it is missing. Unless that path is the shared `pex_root` named cache,
+    # every run rebuilds the whole venv in a fresh sandbox.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    rule_runner.set_options((), env_inherit=_ENV_INHERIT)
+    first = rule_runner.request(
+        _FirstPyreflyProcess, [PyreflyRequest((PyreflyFieldSet.create(tgt),))]
+    )
+    assert first.process.append_only_caches.get("pex_root") == ".cache/pex_root"
 
 
 def test_extra_type_stubs(rule_runner: PythonRuleRunner) -> None:
