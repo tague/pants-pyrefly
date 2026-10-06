@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 from collections.abc import Iterator
@@ -221,6 +222,58 @@ def test_remap_roundtrips_synthetic_paths_back_to_real() -> None:
     )  # build root: no prefix
     assert _remap_path("outside/p.py", m) == "outside/p.py"  # unmatched left as-is
     assert _remap_text("--> __pyrefly_root_1/pkg/m.py:5:1", m) == "--> src/python/pkg/m.py:5:1"
+
+
+def test_remap_text_rewrites_bare_roots_and_spares_lookalikes() -> None:
+    m = FrozenDict(
+        {"__pyrefly_root_0": ".", "__pyrefly_root_1": "lib", "__pyrefly_root_2": "src/python"}
+    )
+    # A missing-import hint names each root on its own, as the last segment of an absolute
+    # sandbox path (Pants strips the sandbox prefix afterwards). The build root becomes `.`.
+    hint = (
+        'override: ["/x/pants-sandbox-a/__pyrefly_root_0", "/x/pants-sandbox-a/__pyrefly_root_2"]'
+    )
+    assert (
+        _remap_text(hint, m)
+        == 'override: ["/x/pants-sandbox-a/.", "/x/pants-sandbox-a/src/python"]'
+    )
+    assert _remap_text('["__pyrefly_root_1"]', m) == '["lib"]'
+    # JSON-escaped and end-of-text occurrences.
+    assert _remap_text('[\\"__pyrefly_root_1\\"]', m) == '[\\"lib\\"]'
+    assert _remap_text("in __pyrefly_root_2", m) == "in src/python"
+    # Paths under a root, in the shapes Pyrefly's output formats use.
+    assert (
+        _remap_text("file=__pyrefly_root_2/app/f.py,line=1", m) == "file=src/python/app/f.py,line=1"
+    )
+    assert _remap_text('"path": "__pyrefly_root_0/scripts/x.py"', m) == '"path": "scripts/x.py"'
+    # Under `--color=always`, a location follows an ANSI color code directly; the code is kept.
+    assert _remap_text("\x1b[34m__pyrefly_root_2/app/f.py\x1b[0m:1:8", m) == (
+        "\x1b[34msrc/python/app/f.py\x1b[0m:1:8"
+    )
+    assert _remap_text(" \x1b[1m\x1b[94m--> \x1b[0m__pyrefly_root_0/scripts/x.py:1:8", m) == (
+        " \x1b[1m\x1b[94m--> \x1b[0mscripts/x.py:1:8"
+    )
+    assert _remap_text("\x1b[1;31m__pyrefly_root_1\x1b[0m", m) == "\x1b[1;31mlib\x1b[0m"
+    assert _remap_text("\x1b[38;5;12m__pyrefly_root_2/a.py", m) == "\x1b[38;5;12msrc/python/a.py"
+    # Lookalikes are left alone: names that were not generated for this invocation, and generated
+    # names that are only part of a longer word (on either side, colored or not).
+    for untouched in (
+        "Literal['__pyrefly_root_7']",
+        "__pyrefly_root_10/pkg/m.py",
+        "my__pyrefly_root_1",
+        "__pyrefly_root_1x",
+        "__pyrefly_root_1_cfg",
+        "__pyrefly_root_1-old",
+        "a.__pyrefly_root_1",
+        "__pyrefly_root_1.sub",
+        "-__pyrefly_root_1",
+        "\x1b[0m__pyrefly_root_10",
+        "\x1b[0m__pyrefly_root_1x",
+        "\x1b[0m__pyrefly_root_1.sub",
+    ):
+        assert _remap_text(untouched, m) == untouched
+    # Nothing re-staged: the text is returned unchanged.
+    assert _remap_text("__pyrefly_root_0/f.py", FrozenDict({})) == "__pyrefly_root_0/f.py"
 
 
 def test_passing(rule_runner: PythonRuleRunner) -> None:
@@ -896,3 +949,135 @@ def test_suppress_inserts_ignore_comments(rule_runner: PythonRuleRunner) -> None
     assert result.exit_code == 0
     with open(os.path.join(rule_runner.build_root, "src/project/f.py")) as fh:
         assert "pyrefly: ignore" in fh.read()
+
+
+# ---
+# Re-staged source roots never leak into what the user sees.
+# ---
+
+# User content that merely contains a synthetic root name; it must come through untouched.
+_LOOKALIKE = "my__pyrefly_root_0"
+_ANSI_SGR = re.compile(r"\x1b\[[0-9;:]*m")
+
+
+def _assert_no_synthetic_root(text: str) -> None:
+    """No synthetic root name anywhere in `text`, apart from the deliberate lookalike literal."""
+    assert "__pyrefly_root_" not in text.replace(_LOOKALIKE, ""), text
+
+
+# Three source roots: the build root (`scripts/`), `lib`, and `src/python`. `app` imports `util`
+# from `lib`, so both of those roots are staged even when only `app` is checked.
+_THREE_ROOT_FILES = {
+    "src/python/app/f.py": (
+        "import a_module_that_truly_does_not_exist_pyrefly  # pants: no-infer-dep\n"
+        "from util.helpers import helper\n"
+        # User content that merely contains a synthetic name must survive the rewrite.
+        f'x: int = "{_LOOKALIKE}"\n'
+    ),
+    "src/python/app/BUILD": "python_sources()",
+    "lib/util/helpers.py": "def helper() -> int:\n    return 1\n",
+    "lib/util/BUILD": "python_sources()",
+    "scripts/tool.py": "import another_module_that_does_not_exist_pyrefly  # pants: no-infer-dep\n",
+    "scripts/BUILD": "python_sources()",
+    # The legacy preset flags the bad-assignment that carries the user's string.
+    "pyrefly.toml": 'preset = "legacy"\n',
+}
+_THREE_ROOT_ARGS = ["--source-root-patterns=['/', '/src/python', '/lib']"]
+
+
+def _three_root_targets(rule_runner: PythonRuleRunner) -> list[Target]:
+    rule_runner.write_files(_THREE_ROOT_FILES)
+    return [
+        rule_runner.get_target(Address("src/python/app", relative_file_path="f.py")),
+        rule_runner.get_target(Address("scripts", relative_file_path="tool.py")),
+    ]
+
+
+def _search_path_overrides(text: str) -> list[list[str]]:
+    """Every `Search path override` list in a missing-import hint, parsed."""
+    return [
+        json.loads(match)
+        for match in re.findall(r"Search path override \(from command line\): (\[[^\]]*\])", text)
+    ]
+
+
+def test_missing_import_hint_names_real_source_roots(rule_runner: PythonRuleRunner) -> None:
+    # Pyrefly's missing-import hint lists the `--search-path`s it was given, which are the
+    # plugin's re-staged roots; the user must see the real source roots instead.
+    targets = _three_root_targets(rule_runner)
+    result = run_pyrefly(rule_runner, targets, extra_args=_THREE_ROOT_ARGS)
+    assert len(result) == 1
+    assert result[0].exit_code == 1
+    combined = result[0].stdout + result[0].stderr
+    _assert_no_synthetic_root(combined)
+    assert _search_path_overrides(combined) == [[".", "lib", "src/python"]] * 2, combined
+    assert "src/python/app/f.py" in combined
+    assert "scripts/tool.py" in combined
+    assert f"Literal['{_LOOKALIKE}']" in combined
+
+
+def test_missing_import_hint_names_real_source_roots_json(rule_runner: PythonRuleRunner) -> None:
+    targets = _three_root_targets(rule_runner)
+    result = run_pyrefly(
+        rule_runner, targets, extra_args=[*_THREE_ROOT_ARGS, "--pyrefly-output-format=json"]
+    )
+    assert result[0].exit_code == 1
+    _assert_no_synthetic_root(result[0].stdout + result[0].stderr)
+    errors = json.loads(result[0].stdout[result[0].stdout.index("{") :])["errors"]
+    hints = [e["description"] for e in errors if e["name"] == "missing-import"]
+    assert len(hints) == 2
+    assert all(_search_path_overrides(h) == [[".", "lib", "src/python"]] for h in hints), hints
+    assert {e["path"] for e in errors} == {"src/python/app/f.py", "scripts/tool.py"}
+
+
+@pytest.mark.parametrize("output_format", ["min-text", "full-text"])
+def test_colored_output_names_real_paths(rule_runner: PythonRuleRunner, output_format: str) -> None:
+    # Under `--color=always`, Pyrefly prints each location straight after an ANSI color code
+    # (e.g. `\x1b[34m<path>` in min-text, `\x1b[0m<path>` in full-text); those must be mapped too.
+    targets = _three_root_targets(rule_runner)
+    result = run_pyrefly(
+        rule_runner,
+        targets,
+        extra_args=[
+            *_THREE_ROOT_ARGS,
+            f"--pyrefly-output-format={output_format}",
+            "--pyrefly-args=['--color=always']",
+        ],
+    )
+    assert result[0].exit_code == 1
+    combined = result[0].stdout + result[0].stderr
+    assert _ANSI_SGR.search(combined), "expected colored output"
+    _assert_no_synthetic_root(combined)
+    plain = _ANSI_SGR.sub("", combined)
+    assert "src/python/app/f.py:1:8" in plain, plain
+    assert "scripts/tool.py:1:8" in plain, plain
+    if output_format == "full-text":
+        assert _search_path_overrides(plain) == [[".", "lib", "src/python"]] * 2, plain
+
+
+def test_update_baseline_full_format_description_names_real_source_roots(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # Pyrefly < 1.3 writes the full-format baseline, whose `description` is the error's whole text,
+    # hints included. It must name the real source roots, not the sandbox or the re-staged roots,
+    # and gating on it must still work.
+    targets = _three_root_targets(rule_runner)
+    version_args = [*_THREE_ROOT_ARGS, "--pyrefly-version=1.2.0"]
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=[*version_args, "--pyrefly-baseline=bl.json", "src/python/app:", "scripts:"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        raw = fh.read()
+    _assert_no_synthetic_root(raw)
+    assert "pants-sandbox-" not in raw, raw
+    hints = [e["description"] for e in json.loads(raw)["errors"] if e["name"] == "missing-import"]
+    assert len(hints) == 2
+    assert all(_search_path_overrides(h) == [[".", "lib", "src/python"]] for h in hints), hints
+
+    gated = run_pyrefly(
+        rule_runner, targets, extra_args=[*version_args, "--pyrefly-baseline=bl.json"]
+    )
+    assert gated[0].exit_code == 0

@@ -200,8 +200,9 @@ pants pyrefly-coverage --pyrefly-coverage-fail-under=80 ::   # also fails if bel
   root prefix stripped, and each of those is passed as a single `--search-path` alongside
   `--disable-search-path-heuristics`. Sibling directories can't nest, so every file is reachable
   under exactly one module identity no matter how `root_patterns` overlap. Pyrefly's synthetic paths
-  are mapped back to real repo paths in diagnostics, baseline files, and `suppress` edits, so this is
-  invisible in output.
+  are mapped back to real repo paths in diagnostics (including the search-path list in
+  missing-import hints, which names the real source roots), baseline files, and `suppress` edits,
+  so this is invisible in output.
 
   The diagnostic goals (`pyrefly-coverage`, `pyrefly-dump-config`, `pyrefly-lsp-config`) don't
   re-stage — they pass your real source roots, deduplicated to each file's *nearest* root. If

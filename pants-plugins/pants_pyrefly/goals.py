@@ -40,8 +40,9 @@ from pants.engine.rules import Rule, collect_rules, concurrently, goal_rule, imp
 from pants.engine.target import AllTargets, Targets
 from pants.engine.unions import UnionRule
 from pants.option.option_types import BoolOption, FloatOption, StrOption
+from pants.util.frozendict import FrozenDict
 from pants.util.logging import LogLevel
-from pants.util.strutil import softwrap
+from pants.util.strutil import softwrap, strip_v2_chroot_path
 
 from pants_pyrefly.rules import (
     _BASELINE_OUTPUT,
@@ -49,6 +50,7 @@ from pants_pyrefly.rules import (
     PyreflyRequest,
     _dedupe_search_path_roots,
     _remap_path,
+    _remap_text,
     _setup_pyrefly_process,
     _unstage_digest,
     pyrefly_determine_partitions,
@@ -57,6 +59,17 @@ from pants_pyrefly.rules import (
 from pants_pyrefly.subsystems import Pyrefly
 
 logger = logging.getLogger(__name__)
+
+
+def _user_facing(text: str | bytes, synth_root_to_real: FrozenDict[str, str]) -> str:
+    """Pyrefly output with re-staged roots mapped back to real paths and the sandbox prefix removed.
+
+    `check` gets the sandbox stripping from `CheckResult`; goals that surface Pyrefly's text
+    themselves (error logs, a baseline's `description`) must do both steps here.
+    """
+    if isinstance(text, bytes):
+        text = text.decode(errors="replace")
+    return strip_v2_chroot_path(_remap_text(text, synth_root_to_real))
 
 
 # ---
@@ -124,14 +137,14 @@ async def pyrefly_update_baseline(
         execute_process(inv.process, **implicitly()) for inv in invocations
     )
 
-    for result in results:
+    for invocation, result in zip(invocations, results, strict=True):
         # 0 == no errors, 1 == errors found (both expected); anything else is a tool failure, and
         # we must not clobber a good baseline with a partial/empty one.
         if result.exit_code not in (0, 1):
+            stderr = _user_facing(result.stderr, invocation.synth_root_to_real)
             logger.error(
                 f"Pyrefly exited with code {result.exit_code} while updating the baseline; "
-                f"leaving the existing baseline unchanged.\n"
-                f"{result.stderr.decode(errors='replace')}"
+                f"leaving the existing baseline unchanged.\n{stderr}"
             )
             return PyreflyUpdateBaseline(exit_code=result.exit_code)
 
@@ -145,6 +158,13 @@ async def pyrefly_update_baseline(
                 for error in json.loads(file_content.content).get("errors", []):
                     if isinstance(error, dict) and "path" in error:
                         error["path"] = _remap_path(error["path"], invocation.synth_root_to_real)
+                    if isinstance(error, dict) and isinstance(error.get("description"), str):
+                        # Full-format baselines (Pyrefly < 1.3) carry each error's full text,
+                        # whose hints name the sandbox and the synthetic roots. Pyrefly does not
+                        # match on it, so make it read as `check` output does.
+                        error["description"] = _user_facing(
+                            error["description"], invocation.synth_root_to_real
+                        )
                     all_errors.append(error)
 
     merged = json.dumps({"errors": all_errors}, indent=2).encode()
@@ -412,13 +432,14 @@ async def pyrefly_suppress(
         execute_process(inv.process, **implicitly()) for inv in invocations
     )
 
-    for result in results:
+    for invocation, result in zip(invocations, results, strict=True):
         # 0 == nothing to do, 1 == errors were suppressed (both expected). Anything else is a tool
         # failure; don't write back a partial/garbled edit.
         if result.exit_code not in (0, 1):
+            stderr = _user_facing(result.stderr, invocation.synth_root_to_real)
             logger.error(
                 f"Pyrefly `suppress` exited with code {result.exit_code}; files left unchanged.\n"
-                f"{result.stderr.decode(errors='replace')}"
+                f"{stderr}"
             )
             return PyreflySuppress(exit_code=result.exit_code)
 
