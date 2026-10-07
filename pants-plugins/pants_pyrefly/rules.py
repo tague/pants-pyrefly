@@ -523,6 +523,14 @@ async def _partition_baseline(
     return await create_digest(CreateDigest(out))
 
 
+def _discovered_config(files: Iterable[str]) -> str | None:
+    """The discovered config Pyrefly itself would use: `pyrefly.toml` wins over `pyproject.toml`."""
+    for name in ("pyrefly.toml", "pyproject.toml"):
+        if name in files:
+            return name
+    return None
+
+
 async def _setup_pyrefly_process(
     partition: PyreflyPartition,
     pyrefly: Pyrefly,
@@ -717,10 +725,15 @@ async def _setup_pyrefly_process(
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
-    # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
-    # relative to the sandbox cwd; both are materialized into the input digest above.
-    if pyrefly.config:
-        argv.append(f"--config={pyrefly.config}")
+    # Pin one config for every file Pyrefly loads, as `pyrefly check` does in project mode and as
+    # Pyrefly's own Bazel and Buck integrations do. Passing files explicitly otherwise makes Pyrefly
+    # search upward from each file for its own config, and third-party files live in the
+    # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
+    # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. Both an
+    # explicit and a discovered config are materialized into the input digest above.
+    config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
+    if config_path:
+        argv.append(f"--config={config_path}")
     if is_check:
         # `check`-only flags; `coverage report`/`check` do not accept these.
         if pyrefly.output_format:

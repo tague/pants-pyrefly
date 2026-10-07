@@ -84,6 +84,17 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   was most of the time `pants check` spent. The venv is now built once and reused, as it is for
   Pants' own Python tools. Diagnostics are unchanged. A CI runner that starts with an empty
   named-caches directory still builds the venv once per run.
+- **Your discovered Pyrefly config now applies to every file Pyrefly loads.** The plugin passes a
+  discovered `pyrefly.toml` (or `pyproject.toml` with `[tool.pyrefly]`) to Pyrefly as `--config`,
+  as it already did for `[pyrefly].config`. Pyrefly then uses that one config for your code and
+  your third-party packages alike, as `pyrefly check` does in project mode and as Pyrefly's Bazel
+  and Buck integrations do. Without it, Pyrefly looks for a config upward from each file. With the
+  venv now in Pants' named cache, outside the sandbox, third-party files would otherwise get
+  whatever config sits above that cache, or one Pyrefly builds from a `mypy.ini` or
+  `pyrightconfig.json` that a package ships, and could print warnings such as
+  `Invalid search-path: .../site-packages/<package>/... does not exist`. If both config files are
+  present, `pyrefly.toml` is used, matching Pyrefly's own precedence. Projects with no Pyrefly
+  config are unaffected.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
