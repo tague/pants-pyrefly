@@ -471,13 +471,19 @@ def test_discovered_config_precedence() -> None:
 @pytest.mark.parametrize(
     ("config_files", "extra_args", "expected"),
     [
-        pytest.param({}, [], None, id="no-config"),
+        # No config to pass: the one Pyrefly falls back to is generated.
+        pytest.param({}, [], "__pyrefly_config.toml", id="no-config"),
         pytest.param({"pyrefly.toml": "[errors]\n"}, [], "pyrefly.toml", id="pyrefly-toml"),
         pytest.param(
             {"pyproject.toml": "[tool.pyrefly]\n"}, [], "pyproject.toml", id="pyproject-toml"
         ),
         # Not a Pyrefly config, so not discovered.
-        pytest.param({"pyproject.toml": "[tool.ruff]\n"}, [], None, id="pyproject-other-tool"),
+        pytest.param(
+            {"pyproject.toml": "[tool.ruff]\n"},
+            [],
+            "__pyrefly_config.toml",
+            id="pyproject-other-tool",
+        ),
         pytest.param(
             {"pyrefly.toml": "[errors]\n", "pyproject.toml": "[tool.pyrefly]\n"},
             [],
@@ -496,7 +502,7 @@ def test_process_pins_one_config(
     rule_runner: PythonRuleRunner,
     config_files: dict[str, str],
     extra_args: list[str],
-    expected: str | None,
+    expected: str,
 ) -> None:
     # Pyrefly is given files explicitly, so without `--config` it searches upward from each file
     # for its own config, third-party files included. Those live in the `pex_root` named cache
@@ -508,7 +514,24 @@ def test_process_pins_one_config(
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
     argv = first_pyrefly_process(rule_runner, [tgt], extra_args=extra_args).argv
     config_args = [arg for arg in argv if arg.startswith("--config")]
-    assert config_args == ([f"--config={expected}"] if expected else [])
+    assert config_args == [f"--config={expected}"]
+
+
+def test_config_outside_sandbox_is_ignored(rule_runner: PythonRuleRunner, tmp_path: Path) -> None:
+    # With no project config, Pyrefly would search upward from each file and could pick up a config
+    # outside the sandbox: above the sandbox for project files, or above Pants' named caches (e.g.
+    # in the home directory) for third-party files. The generated config pins the fallback instead.
+    # The fixture's sandboxes live under `tmp_path`, so this config sits above them.
+    (tmp_path / "pyrefly.toml").write_text('preset = "legacy"\n')
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    # The `basic` preset Pyrefly falls back to does not flag this; `legacy` would.
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
 
 
 def test_has_config_flag() -> None:

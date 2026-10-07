@@ -157,6 +157,12 @@ async def pyrefly_determine_partitions(
     )
 
 
+# The config the plugin writes into the sandbox when the project gives it none to pass: what Pyrefly
+# itself falls back to when it finds no config (the `basic` preset). Any name but `pyproject.toml`
+# is parsed as a `pyrefly.toml`.
+_GENERATED_CONFIG = "__pyrefly_config.toml"
+_GENERATED_CONFIG_CONTENT = b'preset = "basic"\n'
+
 # Fixed sandbox path where `--update-baseline` writes the baseline; the update-baseline goal
 # relocates it to the user's configured `[pyrefly].baseline` path on write-back.
 _BASELINE_OUTPUT = "__pyrefly_baseline_out.json"
@@ -699,9 +705,23 @@ async def _setup_pyrefly_process(
     # Pass the files to check via an argfile rather than argv, so we never hit OS command-line
     # length limits on targets with many files (Pyrefly reads `@<file>`, like other clap CLIs).
     file_list_path = "__pyrefly_files.txt"
-    file_list_digest = await create_digest(
-        CreateDigest([FileContent(file_list_path, "\n".join(reported_files).encode())])
-    )
+    generated_files = [FileContent(file_list_path, "\n".join(reported_files).encode())]
+
+    # Pin one config for every file Pyrefly loads, as `pyrefly check` does in project mode and as
+    # Pyrefly's own Bazel and Buck integrations do. Passing files explicitly otherwise makes Pyrefly
+    # search upward from each file for its own config, and third-party files live in the
+    # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
+    # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. An explicit
+    # or discovered config is materialized into the input digest below; with neither, we generate
+    # the config Pyrefly falls back to. A config the user passes in `[pyrefly].args` wins instead:
+    # Pyrefly rejects a repeated `--config`.
+    config_path: str | None = None
+    if not _has_config_flag(pyrefly.args):
+        config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
+        if not config_path:
+            config_path = _GENERATED_CONFIG
+            generated_files.append(FileContent(_GENERATED_CONFIG, _GENERATED_CONFIG_CONTENT))
+    generated_digest = await create_digest(CreateDigest(generated_files))
 
     input_digest = await merge_digests(
         MergeDigests(
@@ -709,7 +729,7 @@ async def _setup_pyrefly_process(
                 *source_digests,
                 config_file_snapshot.snapshot.digest,
                 requirements_venv_pex.digest,
-                file_list_digest,
+                generated_digest,
                 baseline_digest,
             )
         )
@@ -730,15 +750,8 @@ async def _setup_pyrefly_process(
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
-    # Pin one config for every file Pyrefly loads, as `pyrefly check` does in project mode and as
-    # Pyrefly's own Bazel and Buck integrations do. Passing files explicitly otherwise makes Pyrefly
-    # search upward from each file for its own config, and third-party files live in the
-    # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
-    # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. Both an
-    # explicit and a discovered config are materialized into the input digest above. A config the
-    # user passes in `[pyrefly].args` wins instead: Pyrefly rejects a repeated `--config`.
-    config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
-    if config_path and not _has_config_flag(pyrefly.args):
+    # The one config every file uses (see above).
+    if config_path:
         argv.append(f"--config={config_path}")
     if is_check:
         # `check`-only flags; `coverage report`/`check` do not accept these.

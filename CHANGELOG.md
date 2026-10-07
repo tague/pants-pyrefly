@@ -102,6 +102,20 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 
   A `--config` or `-c` in `[pyrefly].args` still replaces the plugin's, since Pyrefly rejects a
   repeated `--config`.
+
+  If the plugin finds no config to pass (no root `pyrefly.toml` or `[tool.pyrefly]`, or
+  `config_discovery = false` without `[pyrefly].config`), it passes a generated one holding what
+  Pyrefly uses when it finds none, `preset = "basic"`. Pyrefly no longer searches for a config
+  per file, so no config outside your repo applies: before, a Pyrefly, mypy or pyright config in a
+  directory above Pants' sandbox could apply to your files, and one above Pants' cache (such as
+  your home directory) to third-party packages. Two visible changes for projects without a
+  config:
+  - Third-party packages that ship a `mypy.ini` or `pyrightconfig.json` are analyzed with the
+    `basic` preset instead of a config Pyrefly converted from theirs, so code that uses them can
+    report errors it did not before. Pyrefly's warnings about converting those files (e.g.
+    `Invalid search-path: .../site-packages/<package>/...`) are gone.
+  - Pyrefly's "No `pyrefly.toml` found — using preset `basic`" notice no longer appears. Run
+    `pants pyrefly-init` to create a config.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
