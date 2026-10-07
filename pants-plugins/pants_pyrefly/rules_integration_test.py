@@ -68,18 +68,32 @@ _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
 
 
 @dataclass(frozen=True)
+class _FirstPyreflyProcessRequest:
+    request: PyreflyRequest
+    subcommand: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _FirstPyreflyProcess:
     process: Process
 
 
 @rule
 async def _first_pyrefly_process(
-    request: PyreflyRequest, pyrefly: Pyrefly, platform: Platform, python_setup: PythonSetup
+    request: _FirstPyreflyProcessRequest,
+    pyrefly: Pyrefly,
+    platform: Platform,
+    python_setup: PythonSetup,
 ) -> _FirstPyreflyProcess:
-    """Test-only: the `check` Process for the first partition, without running it."""
-    partitions = await pyrefly_determine_partitions(request, **implicitly())
+    """Test-only: a subcommand's Process for the first partition, without running it."""
+    partitions = await pyrefly_determine_partitions(request.request, **implicitly())
     invocation = await _setup_pyrefly_process(
-        partitions[0], pyrefly, platform, python_setup, cache_scope=ProcessCacheScope.SUCCESSFUL
+        partitions[0],
+        pyrefly,
+        platform,
+        python_setup,
+        subcommand=request.subcommand,
+        cache_scope=ProcessCacheScope.SUCCESSFUL,
     )
     return _FirstPyreflyProcess(invocation.process)
 
@@ -128,7 +142,7 @@ def rule_runner(tmp_path: Path) -> Iterator[PythonRuleRunner]:
             *source_files.rules(),
             *collect_rules({"_first_pyrefly_process": _first_pyrefly_process}),
             QueryRule(CheckResults, (PyreflyRequest,)),
-            QueryRule(_FirstPyreflyProcess, (PyreflyRequest,)),
+            QueryRule(_FirstPyreflyProcess, (_FirstPyreflyProcessRequest,)),
         ],
         target_types=[
             PythonSourcesGeneratorTarget,
@@ -156,11 +170,13 @@ def first_pyrefly_process(
     targets: list[Target],
     *,
     extra_args: list[str] | None = None,
+    subcommand: tuple[str, ...] = ("check",),
 ) -> Process:
-    """The `check` Process Pyrefly would run for the first partition, without running it."""
+    """The Process Pyrefly would run for the first partition, without running it."""
     rule_runner.set_options(extra_args or (), env_inherit=_ENV_INHERIT)
     field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
-    return rule_runner.request(_FirstPyreflyProcess, [PyreflyRequest(field_sets)]).process
+    request = _FirstPyreflyProcessRequest(PyreflyRequest(field_sets), subcommand)
+    return rule_runner.request(_FirstPyreflyProcess, [request]).process
 
 
 # ---
@@ -574,6 +590,31 @@ def test_user_config_arg_replaces_discovered_config(
         rule_runner, [tgt], extra_args=[f"--pyrefly-args={user_args!r}"]
     ).argv
     assert [arg for arg in argv if _has_config_flag([arg])] == user_args[:1]
+
+
+@pytest.mark.parametrize(
+    "subcommand", [("suppress",), ("coverage", "report"), ("dump-config",)], ids=" ".join
+)
+def test_user_config_arg_does_not_reach_other_subcommands(
+    rule_runner: PythonRuleRunner, subcommand: tuple[str, ...]
+) -> None:
+    # `[pyrefly].args` are only passed to `check`, so a `--config` there must not stop the other
+    # subcommands from getting the project's config.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": "[tool.pyrefly]\n",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    argv = first_pyrefly_process(
+        rule_runner,
+        [tgt],
+        extra_args=["--pyrefly-args=['--config=pyproject.toml']"],
+        subcommand=subcommand,
+    ).argv
+    assert [arg for arg in argv if _has_config_flag([arg])] == ["--config=pyproject.toml"]
 
 
 @pytest.mark.parametrize("user_args", _USER_CONFIG_ARGS[1:3])

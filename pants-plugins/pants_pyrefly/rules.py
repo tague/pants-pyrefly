@@ -713,10 +713,10 @@ async def _setup_pyrefly_process(
     # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
     # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. An explicit
     # or discovered config is materialized into the input digest below; with neither, we generate
-    # the config Pyrefly falls back to. A config the user passes in `[pyrefly].args` wins instead:
-    # Pyrefly rejects a repeated `--config`.
+    # the config Pyrefly falls back to. A config the user passes in `[pyrefly].args` wins instead
+    # (Pyrefly rejects a repeated `--config`), but those args only reach `check`.
     config_path: str | None = None
-    if not _has_config_flag(pyrefly.args):
+    if not (is_check and _has_config_flag(pyrefly.args)):
         config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
         if not config_path:
             config_path = _GENERATED_CONFIG
