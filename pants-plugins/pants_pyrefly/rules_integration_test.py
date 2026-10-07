@@ -551,15 +551,17 @@ def test_config_outside_sandbox_is_ignored(rule_runner: PythonRuleRunner, tmp_pa
     # With no project config, Pyrefly would search upward from each file and could pick up a config
     # outside the sandbox: above the sandbox for project files, or above Pants' named caches (e.g.
     # in the home directory) for third-party files. The generated config pins the fallback instead.
-    # The fixture's sandboxes live under `tmp_path`, so this config sits above them.
+    # The fixture's sandboxes live under `tmp_path`, so this config sits above them. The planted
+    # config is not a process input, so the source must be unique to this test: a cached result
+    # from another test with the same inputs would pass without ever running Pyrefly here.
     (tmp_path / "pyrefly.toml").write_text('preset = "legacy"\n')
     rule_runner.write_files(
         {
-            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/outside.py": 'outside: int = "not an int"\n',
             "src/project/BUILD": "python_sources()",
         }
     )
-    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="outside.py"))
     # The `basic` preset Pyrefly falls back to does not flag this; `legacy` would.
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
 
