@@ -30,6 +30,7 @@ from pants_pyrefly.rules import (
     PyreflyRequest,
     _dedupe_search_path_roots,
     _discovered_config,
+    _has_config_flag,
     _filter_baseline_entries,
     _has_flag,
     _plan_restage,
@@ -508,6 +509,66 @@ def test_process_pins_one_config(
     argv = first_pyrefly_process(rule_runner, [tgt], extra_args=extra_args).argv
     config_args = [arg for arg in argv if arg.startswith("--config")]
     assert config_args == ([f"--config={expected}"] if expected else [])
+
+
+def test_has_config_flag() -> None:
+    for args in (
+        ["--config", "x"],
+        ["--config=x"],
+        ["-c", "x"],
+        ["-c=x"],
+        ["-cx"],
+        ["--min-severity=warn", "-c", "x"],
+    ):
+        assert _has_config_flag(args), args
+    for args in ([], ["--configure"], ["--check-unannotated-defs"], ["x.toml"]):
+        assert not _has_config_flag(args), args
+
+
+_USER_CONFIG_ARGS = [
+    pytest.param(["--config", "pyproject.toml"], id="long-separate"),
+    pytest.param(["--config=pyproject.toml"], id="long-equals"),
+    pytest.param(["-c", "pyproject.toml"], id="short-separate"),
+    pytest.param(["-cpyproject.toml"], id="short-attached"),
+]
+
+
+@pytest.mark.parametrize("user_args", _USER_CONFIG_ARGS)
+def test_user_config_arg_replaces_discovered_config(
+    rule_runner: PythonRuleRunner, user_args: list[str]
+) -> None:
+    # Pyrefly rejects a repeated `--config`, so a config the user passes in `[pyrefly].args` is
+    # the only one Pyrefly gets.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": "[tool.pyrefly]\n",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    argv = first_pyrefly_process(
+        rule_runner, [tgt], extra_args=[f"--pyrefly-args={user_args!r}"]
+    ).argv
+    assert [arg for arg in argv if _has_config_flag([arg])] == user_args[:1]
+
+
+@pytest.mark.parametrize("user_args", _USER_CONFIG_ARGS[1:3])
+def test_user_config_arg_runs_with_discovered_config(
+    rule_runner: PythonRuleRunner, user_args: list[str]
+) -> None:
+    # The same setup end to end: Pyrefly accepts the command and checks with the user's config.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": '[tool.pyrefly]\npreset = "legacy"\n',
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    result = run_pyrefly(rule_runner, [tgt], extra_args=[f"--pyrefly-args={user_args!r}"])
+    assert result[0].exit_code == 1
+    assert "bad-assignment" in result[0].stdout
 
 
 def test_config_sub_config_paths_still_match(rule_runner: PythonRuleRunner) -> None:

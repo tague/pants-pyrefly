@@ -93,8 +93,9 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   whatever config sits above that cache, or one Pyrefly builds from a `mypy.ini` or
   `pyrightconfig.json` that a package ships, and could print warnings such as
   `Invalid search-path: .../site-packages/<package>/... does not exist`. If both config files are
-  present, `pyrefly.toml` is used, matching Pyrefly's own precedence. Projects with no Pyrefly
-  config are unaffected.
+  present, `pyrefly.toml` is used, matching Pyrefly's own precedence. A `--config` or `-c` in
+  `[pyrefly].args` takes its place, since Pyrefly rejects a repeated `--config`. Projects with no
+  Pyrefly config are unaffected.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and

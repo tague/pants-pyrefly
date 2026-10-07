@@ -523,6 +523,11 @@ async def _partition_baseline(
     return await create_digest(CreateDigest(out))
 
 
+def _has_config_flag(args: Iterable[str]) -> bool:
+    """Whether `args` sets Pyrefly's config: `--config x`, `--config=x`, `-c x` or `-cx`."""
+    return any(_is_flag(arg, "--config") or arg.startswith("-c") for arg in args)
+
+
 def _discovered_config(files: Iterable[str]) -> str | None:
     """The discovered config Pyrefly itself would use: `pyrefly.toml` wins over `pyproject.toml`."""
     for name in ("pyrefly.toml", "pyproject.toml"):
@@ -730,9 +735,10 @@ async def _setup_pyrefly_process(
     # search upward from each file for its own config, and third-party files live in the
     # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
     # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. Both an
-    # explicit and a discovered config are materialized into the input digest above.
+    # explicit and a discovered config are materialized into the input digest above. A config the
+    # user passes in `[pyrefly].args` wins instead: Pyrefly rejects a repeated `--config`.
     config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
-    if config_path:
+    if config_path and not _has_config_flag(pyrefly.args):
         argv.append(f"--config={config_path}")
     if is_check:
         # `check`-only flags; `coverage report`/`check` do not accept these.
