@@ -3,7 +3,13 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.1.0 (2026-10-07)
+
+`pants check` no longer rebuilds the third-party venv on every Pyrefly run, which on a large
+lockfile was most of its time. Pyrefly now gets one config for every file it loads. Every stable
+Pyrefly from 1.1.1 is pinned, and the default is now 1.3.2. No breaking changes: the goals,
+`[pyrefly]` options, and `skip_pyrefly` field behave as before. Some diagnostics can change, from
+the newer default Pyrefly and from the config handling; the entries below say when.
 
 - **Every stable Pyrefly from 1.1.1 up to the default is now pinned**: 1.1.1, 1.2.0, 1.2.1,
   1.3.0, 1.3.1, and 1.3.2. Select any of them with just `[pyrefly].version = "..."`; no
