@@ -166,7 +166,9 @@ _GENERATED_CONFIG_CONTENT = b'preset = "basic"\n'
 # A missing-import hint names the config its search path came from ("Looked in these locations
 # (from config in `<sandbox>/__pyrefly_config.toml`):"). For the generated config that is a file the
 # user does not have, and Pyrefly prints no such clause without a config, so drop it.
-_GENERATED_CONFIG_CLAUSE = re.compile(rf" \(from config in `[^`]*{re.escape(_GENERATED_CONFIG)}`\)")
+_GENERATED_CONFIG_CLAUSE = re.compile(
+    rf" \(from config in `[^`]*/{re.escape(_GENERATED_CONFIG)}`\)"
+)
 
 # Fixed sandbox path where `--update-baseline` writes the baseline; the update-baseline goal
 # relocates it to the user's configured `[pyrefly].baseline` path on write-back.
@@ -559,7 +561,8 @@ def _has_pyrefly_table(pyproject: bytes) -> bool:
     the stricter `default` preset. One that does not parse is still passed, so Pyrefly reports why.
     """
     try:
-        data = tomllib.loads(pyproject.decode())
+        # `utf-8-sig`: Pyrefly accepts a leading BOM, `tomllib` does not.
+        data = tomllib.loads(pyproject.decode("utf-8-sig"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError):
         return True
     tool = data.get("tool")

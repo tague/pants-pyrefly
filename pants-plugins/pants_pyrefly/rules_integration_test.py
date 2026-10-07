@@ -340,9 +340,10 @@ def test_remap_text_drops_generated_config_clause() -> None:
         assert _remap_text(f'"description": "x\\n{hint}\\n"', m) == (
             '"description": "x\\n  Looked in these locations:\\n"'
         )
-    # A config the user has is still named.
-    user = "  Looked in these locations (from config in `/tmp/sandbox/pyrefly.toml`):"
-    assert _remap_text(user, FrozenDict({})) == user
+    # A config the user has is still named, even one whose name ends like the generated one.
+    for name in ("pyrefly.toml", "build/my__pyrefly_config.toml"):
+        user = f"  Looked in these locations (from config in `/tmp/sandbox/{name}`):"
+        assert _remap_text(user, FrozenDict({})) == user
 
 
 def test_passing(rule_runner: PythonRuleRunner) -> None:
@@ -628,6 +629,9 @@ def test_has_pyrefly_table() -> None:
     assert not _has_pyrefly_table(b'[project]\nname = "x"\n')
     # Not valid TOML: still passed, so Pyrefly reports the parse error.
     assert _has_pyrefly_table(b"[tool.pyrefly\n")
+    # A leading BOM is valid for Pyrefly, so it must not count as invalid TOML.
+    assert not _has_pyrefly_table(b'\xef\xbb\xbf[project]\nname = "x"\n# [tool.pyrefly]\n')
+    assert _has_pyrefly_table(b"\xef\xbb\xbf[tool.pyrefly]\n")
 
 
 def test_pyproject_that_only_mentions_pyrefly_keeps_basic_preset(
@@ -695,7 +699,8 @@ def test_user_config_arg_does_not_reach_other_subcommands(
     rule_runner: PythonRuleRunner, subcommand: tuple[str, ...]
 ) -> None:
     # `[pyrefly].args` are only passed to `check`, so a `--config` there must not stop the other
-    # subcommands from getting the project's config.
+    # subcommands from getting the project's config. The user's config is a different file, so the
+    # assertion tells the two apart.
     rule_runner.write_files(
         {
             "src/project/f.py": "x = 1\n",
@@ -707,7 +712,7 @@ def test_user_config_arg_does_not_reach_other_subcommands(
     argv = first_pyrefly_process(
         rule_runner,
         [tgt],
-        extra_args=["--pyrefly-args=['--config=pyproject.toml']"],
+        extra_args=["--pyrefly-args=['--config=build-support/pyrefly.toml']"],
         subcommand=subcommand,
     ).argv
     assert [arg for arg in argv if _has_config_flag([arg])] == ["--config=pyproject.toml"]
