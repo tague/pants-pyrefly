@@ -163,6 +163,10 @@ async def pyrefly_determine_partitions(
 # is parsed as a `pyrefly.toml`.
 _GENERATED_CONFIG = "__pyrefly_config.toml"
 _GENERATED_CONFIG_CONTENT = b'preset = "basic"\n'
+# A missing-import hint names the config its search path came from ("Looked in these locations
+# (from config in `<sandbox>/__pyrefly_config.toml`):"). For the generated config that is a file the
+# user does not have, and Pyrefly prints no such clause without a config, so drop it.
+_GENERATED_CONFIG_CLAUSE = re.compile(rf" \(from config in `[^`]*{re.escape(_GENERATED_CONFIG)}`\)")
 
 # Fixed sandbox path where `--update-baseline` writes the baseline; the update-baseline goal
 # relocates it to the user's configured `[pyrefly].baseline` path on write-back.
@@ -393,7 +397,11 @@ def _remap_text(text: str, synth_root_to_real: FrozenDict[str, str]) -> str:
     `a.__pyrefly_root_1`, and `__pyrefly_root_1.sub`. The one exception is a name directly after an
     ANSI color code (`\x1b[...m`, e.g. under `--color=always`), whose final `m` would otherwise
     look like part of a word; the code is kept as-is.
+
+    Also drops the clause naming the generated config from missing-import hints (see
+    `_GENERATED_CONFIG_CLAUSE`), whether or not sources were re-staged.
     """
+    text = _GENERATED_CONFIG_CLAUSE.sub("", text)
     if not synth_root_to_real:
         return text
     # Longest name first, so no name can win over a longer one it prefixes.

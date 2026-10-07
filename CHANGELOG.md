@@ -93,8 +93,8 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   analyzed with your config. A discovered config now behaves exactly like one set with
   `[pyrefly].config`, which changes three edge cases:
   - `disable-project-excludes-heuristics = true` is now honored: files Pants passes in under
-    directories such as `venv/`, `node_modules/`, `__pycache__/` or hidden directories are
-    checked instead of silently skipped.
+    `venv/`, `node_modules/` or `__pycache__/` directories are checked, instead of skipped with a
+    `Skipping include pattern` warning.
   - A config that fails to parse is a fatal error, instead of Pyrefly printing the parse error and
     checking with defaults.
   - A third-party package that ships its own `pyrefly.toml` or `[tool.pyrefly]` is analyzed with
@@ -108,14 +108,15 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   Pyrefly uses when it finds none, `preset = "basic"`. Pyrefly no longer searches for a config
   per file, so no config outside your repo applies: before, a Pyrefly, mypy or pyright config in a
   directory above Pants' sandbox could apply to your files, and one above Pants' cache (such as
-  your home directory) to third-party packages. Two visible changes for projects without a
-  config:
+  your home directory) to third-party packages. Visible changes for projects without a config:
   - Third-party packages that ship a `mypy.ini` or `pyrightconfig.json` are analyzed with the
     `basic` preset instead of a config Pyrefly converted from theirs, so code that uses them can
     report errors it did not before. Pyrefly's warnings about converting those files (e.g.
     `Invalid search-path: .../site-packages/<package>/...`) are gone.
   - Pyrefly's "No `pyrefly.toml` found — using preset `basic`" notice no longer appears. Run
     `pants pyrefly-init` to create a config.
+  - `pants pyrefly-dump-config` shows the generated config (`preset = "basic"`, at
+    `__pyrefly_config.toml` in the sandbox) instead of Pyrefly's default configuration.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and

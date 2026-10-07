@@ -332,6 +332,19 @@ def test_remap_text_rewrites_bare_roots_and_spares_lookalikes() -> None:
     assert _remap_text("__pyrefly_root_0/f.py", FrozenDict({})) == "__pyrefly_root_0/f.py"
 
 
+def test_remap_text_drops_generated_config_clause() -> None:
+    # Pyrefly prints no clause without a config; the generated one is not a file the user has.
+    hint = "  Looked in these locations (from config in `/tmp/sandbox/__pyrefly_config.toml`):"
+    for m in (FrozenDict({}), FrozenDict({"__pyrefly_root_0": "src"})):
+        assert _remap_text(hint, m) == "  Looked in these locations:"
+        assert _remap_text(f'"description": "x\\n{hint}\\n"', m) == (
+            '"description": "x\\n  Looked in these locations:\\n"'
+        )
+    # A config the user has is still named.
+    user = "  Looked in these locations (from config in `/tmp/sandbox/pyrefly.toml`):"
+    assert _remap_text(user, FrozenDict({})) == user
+
+
 def test_passing(rule_runner: PythonRuleRunner) -> None:
     rule_runner.write_files(
         {
@@ -564,6 +577,48 @@ def test_config_outside_sandbox_is_ignored(rule_runner: PythonRuleRunner, tmp_pa
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="outside.py"))
     # The `basic` preset Pyrefly falls back to does not flag this; `legacy` would.
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
+
+
+def test_missing_import_hint_without_config_names_no_config(rule_runner: PythonRuleRunner) -> None:
+    # Without a project config the plugin passes a generated one, which Pyrefly would name in the
+    # hint; the user sees the hint Pyrefly prints when there is no config.
+    rule_runner.write_files(
+        {
+            "src/project/hint.py": "import hint_module_that_does_not_exist_pyrefly\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="hint.py"))
+    result = run_pyrefly(rule_runner, [tgt])
+    assert result[0].exit_code == 1
+    combined = result[0].stdout + result[0].stderr
+    assert "Looked in these locations:" in combined, combined
+    assert "__pyrefly_config" not in combined, combined
+
+
+def test_update_baseline_full_format_without_config_names_no_config(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # A Pyrefly < 1.3 baseline's `description` holds the whole hint, so without a project config it
+    # must not name the generated one either (or it would change once on upgrading the plugin).
+    rule_runner.write_files(
+        {
+            "src/project/bl_hint.py": "import baseline_module_that_does_not_exist_pyrefly\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=["--pyrefly-version=1.2.0", "--pyrefly-baseline=bl.json", "src/project:"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        raw = fh.read()
+    assert "__pyrefly_config" not in raw, raw
+    hints = [e["description"] for e in json.loads(raw)["errors"] if e["name"] == "missing-import"]
+    assert len(hints) == 1
+    assert "Looked in these locations:" in hints[0], hints
 
 
 def test_has_pyrefly_table() -> None:
@@ -1260,8 +1315,10 @@ _ANSI_SGR = re.compile(r"\x1b\[[0-9;:]*m")
 
 
 def _assert_no_synthetic_root(text: str) -> None:
-    """No synthetic root name anywhere in `text`, apart from the deliberate lookalike literal."""
+    """No plugin-internal name in `text`: no synthetic root, apart from the deliberate lookalike
+    literal, and no generated config in a missing-import hint."""
     assert "__pyrefly_root_" not in text.replace(_LOOKALIKE, ""), text
+    assert "__pyrefly_config" not in text, text
 
 
 # Three source roots: the build root (`scripts/`), `lib`, and `src/python`. `app` imports `util`
