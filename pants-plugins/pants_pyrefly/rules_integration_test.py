@@ -30,6 +30,7 @@ from pants_pyrefly.rules import (
     PyreflyRequest,
     _dedupe_search_path_roots,
     _discovered_config,
+    _has_pyrefly_table,
     _has_config_flag,
     _filter_baseline_entries,
     _has_flag,
@@ -500,6 +501,19 @@ def test_discovered_config_precedence() -> None:
             "__pyrefly_config.toml",
             id="pyproject-other-tool",
         ),
+        # Discovery matches the text, but there is no `[tool.pyrefly]` table to pass.
+        pytest.param(
+            {"pyproject.toml": "[tool.ruff]\n# [tool.pyrefly]\n"},
+            [],
+            "__pyrefly_config.toml",
+            id="pyproject-mentions-pyrefly",
+        ),
+        pytest.param(
+            {"pyproject.toml": "[tool.pyrefly.errors]\nbad-assignment = false\n"},
+            [],
+            "pyproject.toml",
+            id="pyproject-pyrefly-subtable",
+        ),
         pytest.param(
             {"pyrefly.toml": "[errors]\n", "pyproject.toml": "[tool.pyrefly]\n"},
             [],
@@ -547,6 +561,31 @@ def test_config_outside_sandbox_is_ignored(rule_runner: PythonRuleRunner, tmp_pa
     )
     tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
     # The `basic` preset Pyrefly falls back to does not flag this; `legacy` would.
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
+
+
+def test_has_pyrefly_table() -> None:
+    assert _has_pyrefly_table(b"[tool.pyrefly]\n")
+    assert _has_pyrefly_table(b"[tool.pyrefly.errors]\nbad-assignment = false\n")
+    assert not _has_pyrefly_table(b"[tool.ruff]\n# [tool.pyrefly]\n")
+    assert not _has_pyrefly_table(b'[project]\nname = "x"\n')
+    # Not valid TOML: still passed, so Pyrefly reports the parse error.
+    assert _has_pyrefly_table(b"[tool.pyrefly\n")
+
+
+def test_pyproject_that_only_mentions_pyrefly_keeps_basic_preset(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # Pyrefly treats a `pyproject.toml` without a `[tool.pyrefly]` table as no config and uses
+    # `basic`, which does not flag this; passed as `--config`, it would get the stricter default.
+    rule_runner.write_files(
+        {
+            "src/project/mentions.py": 'mentions: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": '[project]\nname = "x"\n# [tool.pyrefly]\n',
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="mentions.py"))
     assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
 
 

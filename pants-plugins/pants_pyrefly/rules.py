@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import PurePath
@@ -542,6 +543,21 @@ def _discovered_config(files: Iterable[str]) -> str | None:
     return None
 
 
+def _has_pyrefly_table(pyproject: bytes) -> bool:
+    """Whether a `pyproject.toml` really has a `[tool.pyrefly]` table.
+
+    Discovery only matches the text `[tool.pyrefly`, which a comment also contains. Pyrefly treats
+    a `pyproject.toml` without the table as no config, so passing it as `--config` would switch to
+    the stricter `default` preset. One that does not parse is still passed, so Pyrefly reports why.
+    """
+    try:
+        data = tomllib.loads(pyproject.decode())
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return True
+    tool = data.get("tool")
+    return isinstance(tool, dict) and "pyrefly" in tool
+
+
 async def _setup_pyrefly_process(
     partition: PyreflyPartition,
     pyrefly: Pyrefly,
@@ -718,6 +734,12 @@ async def _setup_pyrefly_process(
     config_path: str | None = None
     if not (is_check and _has_config_flag(pyrefly.args)):
         config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
+        if config_path == "pyproject.toml" and not pyrefly.config:
+            contents = await get_digest_contents(config_file_snapshot.snapshot.digest)
+            if not any(
+                fc.path == config_path and _has_pyrefly_table(fc.content) for fc in contents
+            ):
+                config_path = None
         if not config_path:
             config_path = _GENERATED_CONFIG
             generated_files.append(FileContent(_GENERATED_CONFIG, _GENERATED_CONFIG_CONTENT))
