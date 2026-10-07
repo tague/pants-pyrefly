@@ -79,23 +79,29 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 - **Fixed: every Pyrefly run rebuilt the third-party venv.** Pyrefly finds your third-party
   packages through a venv that Pants keeps in its shared `pex_root` named cache. The plugin did
   not mount that cache into Pyrefly's sandbox, so each Pyrefly process (`check` and the
-  `pyrefly-*` goals that read your third-party packages) rebuilt the whole venv from scratch before
-  Pyrefly started, even when nothing had changed. The rebuild time grows with the size of the resolve, and with a large lockfile it
-  was most of the time `pants check` spent. The venv is now built once and reused, as it is for
-  Pants' own Python tools. Diagnostics are unchanged. A CI runner that starts with an empty
-  named-caches directory still builds the venv once per run.
-- **Your discovered Pyrefly config now applies to every file Pyrefly loads.** The plugin passes a
-  discovered `pyrefly.toml` (or `pyproject.toml` with `[tool.pyrefly]`) to Pyrefly as `--config`,
-  as it already did for `[pyrefly].config`. Pyrefly then uses that one config for your code and
-  your third-party packages alike, as `pyrefly check` does in project mode and as Pyrefly's Bazel
-  and Buck integrations do. Without it, Pyrefly looks for a config upward from each file. With the
-  venv now in Pants' named cache, outside the sandbox, third-party files would otherwise get
-  whatever config sits above that cache, or one Pyrefly builds from a `mypy.ini` or
-  `pyrightconfig.json` that a package ships, and could print warnings such as
-  `Invalid search-path: .../site-packages/<package>/... does not exist`. If both config files are
-  present, `pyrefly.toml` is used, matching Pyrefly's own precedence. A `--config` or `-c` in
-  `[pyrefly].args` takes its place, since Pyrefly rejects a repeated `--config`. Projects with no
-  Pyrefly config are unaffected.
+  `pyrefly-*` goals that read your third-party packages) rebuilt the whole venv before Pyrefly
+  started, even when nothing had changed. The rebuild time grows with the size of the resolve;
+  with a large lockfile it was most of the time `pants check` spent. The venv is now built once
+  and reused, as it is for Pants' own Python tools. A CI runner that starts with an empty
+  named-caches directory still builds it once per run.
+
+  Because the venv now lives outside the sandbox, the plugin also passes your discovered config
+  (`pyrefly.toml`, or `pyproject.toml` with `[tool.pyrefly]`; `pyrefly.toml` wins if both exist,
+  as in Pyrefly) to Pyrefly as `--config`, as it already did for `[pyrefly].config`. Pyrefly then
+  uses that one config for your code and your third-party packages, as `pyrefly check` does in
+  project mode and as Pyrefly's Bazel and Buck integrations do, so third-party packages are still
+  analyzed with your config. A discovered config now behaves exactly like one set with
+  `[pyrefly].config`, which changes three edge cases:
+  - `disable-project-excludes-heuristics = true` is now honored: files Pants passes in under
+    directories such as `venv/`, `node_modules/`, `__pycache__/` or hidden directories are
+    checked instead of silently skipped.
+  - A config that fails to parse is a fatal error, instead of Pyrefly printing the parse error and
+    checking with defaults.
+  - A third-party package that ships its own `pyrefly.toml` or `[tool.pyrefly]` is analyzed with
+    your config instead of its own.
+
+  A `--config` or `-c` in `[pyrefly].args` still replaces the plugin's, since Pyrefly rejects a
+  repeated `--config`.
 - Releases are now gated on a Pyrefly compatibility suite
   (`build-support/ci/compat_test.sh`, run by `.github/workflows/compat.yml` for every supported
   version). It drives real Pants runs of `check`, `pyrefly-update-baseline`, and
