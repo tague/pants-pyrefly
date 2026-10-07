@@ -17,8 +17,9 @@
 # Every Pyrefly process is forced to actually run (`--no-local-cache`) with its sandbox preserved,
 # and the script asserts that the binary in each preserved sandbox reports `pyrefly <version>`, so
 # it fails loudly if any other Pyrefly executed. It also asserts that each process was given
-# `--python-version=<minimum Python>`, and that the interpreter it was pointed at
-# (`--python-interpreter-path`) is at least that version.
+# `--python-version=<minimum Python>`, that the interpreter it was pointed at
+# (`--python-interpreter-path`) is at least that version, and that its `.cache/pex_root` is the
+# shared named cache (a symlink), so the third-party venv is reused rather than rebuilt per run.
 #
 # The plugin derives `--python-version` from the minimum of the partition's interpreter
 # constraints, and builds the venv behind `--python-interpreter-path` (third-party packages) with
@@ -126,8 +127,9 @@ run_pants() {
 }
 
 # Assert, from the preserved sandboxes of the run that just finished, that every Pyrefly process
-# executed the requested version, was told `--python-version=$PYTHON_VERSION`, and was pointed at an
-# interpreter of at least that version. Runs before cleanup: the binaries live under $EXEC_ROOT.
+# executed the requested version, was told `--python-version=$PYTHON_VERSION`, was pointed at an
+# interpreter of at least that version, and had the shared `pex_root` named cache mounted. Runs
+# before cleanup: the binaries live under $EXEC_ROOT.
 assert_ran_requested_version() {
   local count=0 run_sh dir ran interp interp_version
   local interpreters=()
@@ -145,6 +147,9 @@ $(cat "$run_sh")"
     interp="$(grep -Eo -- "--python-interpreter-path=[^ '\"]+" "$run_sh" | head -n 1)"
     interp="${interp#--python-interpreter-path=}"
     [[ -n "$interp" ]] || fail "no --python-interpreter-path in the Pyrefly command (sandbox $dir)"
+    [[ -L "$dir/.cache/pex_root" ]] ||
+      fail "the Pyrefly process did not mount the shared pex_root named cache, so its venv is" \
+        "rebuilt on every run (sandbox $dir)"
     interp_version="$(cd "$dir" && "$interp" -c \
       'import sys; print("%d.%d" % sys.version_info[:2])' 2>&1)" ||
       fail "could not run the interpreter Pyrefly was given ($interp, sandbox $dir):" \

@@ -10,6 +10,7 @@ import re
 import shutil
 import stat
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest  # pants: no-infer-dep
@@ -28,17 +29,23 @@ from pants_pyrefly.rules import (
     PyreflyFieldSet,
     PyreflyRequest,
     _dedupe_search_path_roots,
+    _discovered_config,
+    _has_pyrefly_table,
+    _has_config_flag,
     _filter_baseline_entries,
     _has_flag,
     _plan_restage,
     _real_prefix,
     _remap_path,
     _remap_text,
+    _setup_pyrefly_process,
+    pyrefly_determine_partitions,
 )
 from pants_pyrefly import subsystems
 from pants_pyrefly.subsystems import Pyrefly
 
 from pants.backend.python import target_types_rules
+from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
 from pants.backend.python.target_types import (
     PythonRequirementTarget,
@@ -50,13 +57,46 @@ from pants.core.goals.check import CheckResult, CheckResults
 from pants.core.util_rules import config_files, external_tool, source_files
 from pants.engine.addresses import Address
 from pants.engine.internals.scheduler import ExecutionError
-from pants.engine.rules import QueryRule
+from pants.engine.platform import Platform
+from pants.engine.process import Process, ProcessCacheScope
+from pants.engine.rules import QueryRule, collect_rules, implicitly, rule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.util.frozendict import FrozenDict
 
 # Inherited so Pants can discover system interpreters and download the Pyrefly binary.
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}
+
+
+@dataclass(frozen=True)
+class _FirstPyreflyProcessRequest:
+    request: PyreflyRequest
+    subcommand: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _FirstPyreflyProcess:
+    process: Process
+
+
+@rule
+async def _first_pyrefly_process(
+    request: _FirstPyreflyProcessRequest,
+    pyrefly: Pyrefly,
+    platform: Platform,
+    python_setup: PythonSetup,
+) -> _FirstPyreflyProcess:
+    """Test-only: a subcommand's Process for the first partition, without running it."""
+    partitions = await pyrefly_determine_partitions(request.request, **implicitly())
+    invocation = await _setup_pyrefly_process(
+        partitions[0],
+        pyrefly,
+        platform,
+        python_setup,
+        subcommand=request.subcommand,
+        cache_scope=ProcessCacheScope.SUCCESSFUL,
+    )
+    return _FirstPyreflyProcess(invocation.process)
 
 
 def _remove_tree(path: Path) -> None:
@@ -101,7 +141,9 @@ def rule_runner(tmp_path: Path) -> Iterator[PythonRuleRunner]:
             *external_tool.rules(),
             *config_files.rules(),
             *source_files.rules(),
+            *collect_rules({"_first_pyrefly_process": _first_pyrefly_process}),
             QueryRule(CheckResults, (PyreflyRequest,)),
+            QueryRule(_FirstPyreflyProcess, (_FirstPyreflyProcessRequest,)),
         ],
         target_types=[
             PythonSourcesGeneratorTarget,
@@ -122,6 +164,20 @@ def run_pyrefly(
     field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
     checks = rule_runner.request(CheckResults, [PyreflyRequest(field_sets)])
     return checks.results
+
+
+def first_pyrefly_process(
+    rule_runner: PythonRuleRunner,
+    targets: list[Target],
+    *,
+    extra_args: list[str] | None = None,
+    subcommand: tuple[str, ...] = ("check",),
+) -> Process:
+    """The Process Pyrefly would run for the first partition, without running it."""
+    rule_runner.set_options(extra_args or (), env_inherit=_ENV_INHERIT)
+    field_sets = tuple(PyreflyFieldSet.create(tgt) for tgt in targets)
+    request = _FirstPyreflyProcessRequest(PyreflyRequest(field_sets), subcommand)
+    return rule_runner.request(_FirstPyreflyProcess, [request]).process
 
 
 # ---
@@ -276,6 +332,20 @@ def test_remap_text_rewrites_bare_roots_and_spares_lookalikes() -> None:
     assert _remap_text("__pyrefly_root_0/f.py", FrozenDict({})) == "__pyrefly_root_0/f.py"
 
 
+def test_remap_text_drops_generated_config_clause() -> None:
+    # Pyrefly prints no clause without a config; the generated one is not a file the user has.
+    hint = "  Looked in these locations (from config in `/tmp/sandbox/__pyrefly_config.toml`):"
+    for m in (FrozenDict({}), FrozenDict({"__pyrefly_root_0": "src"})):
+        assert _remap_text(hint, m) == "  Looked in these locations:"
+        assert _remap_text(f'"description": "x\\n{hint}\\n"', m) == (
+            '"description": "x\\n  Looked in these locations:\\n"'
+        )
+    # A config the user has is still named, even one whose name ends like the generated one.
+    for name in ("pyrefly.toml", "build/my__pyrefly_config.toml"):
+        user = f"  Looked in these locations (from config in `/tmp/sandbox/{name}`):"
+        assert _remap_text(user, FrozenDict({})) == user
+
+
 def test_passing(rule_runner: PythonRuleRunner) -> None:
     rule_runner.write_files(
         {
@@ -355,6 +425,21 @@ def test_third_party_import_resolves(rule_runner: PythonRuleRunner) -> None:
     assert result[0].exit_code == 0
 
 
+def test_process_mounts_shared_pex_root(rule_runner: PythonRuleRunner) -> None:
+    # Pyrefly reads the third-party venv through a shim that runs it out of `.cache/pex_root`,
+    # rebuilding it there if it is missing. Unless that path is the shared `pex_root` named cache,
+    # every run rebuilds the whole venv in a fresh sandbox.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    process = first_pyrefly_process(rule_runner, [tgt])
+    assert process.append_only_caches.get("pex_root") == ".cache/pex_root"
+
+
 def test_extra_type_stubs(rule_runner: PythonRuleRunner) -> None:
     # `extra_type_stubs` resolves stub-only packages and merges them into the environment Pyrefly
     # inspects, without them becoming runtime dependencies. Assert the option is wired end to end:
@@ -405,6 +490,280 @@ def test_explicit_config_option(rule_runner: PythonRuleRunner) -> None:
         rule_runner, [tgt], extra_args=["--pyrefly-config=build-support/pyrefly.toml"]
     )
     assert result[0].exit_code == 1
+
+
+def test_discovered_config_precedence() -> None:
+    # Pyrefly prefers `pyrefly.toml` over `pyproject.toml` in the same directory.
+    assert _discovered_config(("pyproject.toml", "pyrefly.toml")) == "pyrefly.toml"
+    assert _discovered_config(("pyproject.toml",)) == "pyproject.toml"
+    assert _discovered_config(()) is None
+
+
+@pytest.mark.parametrize(
+    ("config_files", "extra_args", "expected"),
+    [
+        # No config to pass: the one Pyrefly falls back to is generated.
+        pytest.param({}, [], "__pyrefly_config.toml", id="no-config"),
+        pytest.param({"pyrefly.toml": "[errors]\n"}, [], "pyrefly.toml", id="pyrefly-toml"),
+        pytest.param(
+            {"pyproject.toml": "[tool.pyrefly]\n"}, [], "pyproject.toml", id="pyproject-toml"
+        ),
+        # Not a Pyrefly config, so not discovered.
+        pytest.param(
+            {"pyproject.toml": "[tool.ruff]\n"},
+            [],
+            "__pyrefly_config.toml",
+            id="pyproject-other-tool",
+        ),
+        # Discovery matches the text, but there is no `[tool.pyrefly]` table to pass.
+        pytest.param(
+            {"pyproject.toml": "[tool.ruff]\n# [tool.pyrefly]\n"},
+            [],
+            "__pyrefly_config.toml",
+            id="pyproject-mentions-pyrefly",
+        ),
+        pytest.param(
+            {"pyproject.toml": "[tool.pyrefly.errors]\nbad-assignment = false\n"},
+            [],
+            "pyproject.toml",
+            id="pyproject-pyrefly-subtable",
+        ),
+        pytest.param(
+            {"pyrefly.toml": "[errors]\n", "pyproject.toml": "[tool.pyrefly]\n"},
+            [],
+            "pyrefly.toml",
+            id="both",
+        ),
+        pytest.param(
+            {"build-support/pyrefly.toml": "[errors]\n"},
+            ["--pyrefly-config=build-support/pyrefly.toml"],
+            "build-support/pyrefly.toml",
+            id="explicit",
+        ),
+    ],
+)
+def test_process_pins_one_config(
+    rule_runner: PythonRuleRunner,
+    config_files: dict[str, str],
+    extra_args: list[str],
+    expected: str,
+) -> None:
+    # Pyrefly is given files explicitly, so without `--config` it searches upward from each file
+    # for its own config, third-party files included. Those live in the `pex_root` named cache
+    # outside the sandbox and must still get the project's config, so a discovered config is
+    # passed explicitly, just like `[pyrefly].config`.
+    rule_runner.write_files(
+        {"src/project/f.py": "x = 1\n", "src/project/BUILD": "python_sources()", **config_files}
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    argv = first_pyrefly_process(rule_runner, [tgt], extra_args=extra_args).argv
+    config_args = [arg for arg in argv if arg.startswith("--config")]
+    assert config_args == [f"--config={expected}"]
+
+
+def test_config_outside_sandbox_is_ignored(rule_runner: PythonRuleRunner, tmp_path: Path) -> None:
+    # With no project config, Pyrefly would search upward from each file and could pick up a config
+    # outside the sandbox: above the sandbox for project files, or above Pants' named caches (e.g.
+    # in the home directory) for third-party files. The generated config pins the fallback instead.
+    # The fixture's sandboxes live under `tmp_path`, so this config sits above them. The planted
+    # config is not a process input, so the source must be unique to this test: a cached result
+    # from another test with the same inputs would pass without ever running Pyrefly here.
+    (tmp_path / "pyrefly.toml").write_text('preset = "legacy"\n')
+    rule_runner.write_files(
+        {
+            "src/project/outside.py": 'outside: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="outside.py"))
+    # The `basic` preset Pyrefly falls back to does not flag this; `legacy` would.
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
+
+
+def test_missing_import_hint_without_config_names_no_config(rule_runner: PythonRuleRunner) -> None:
+    # Without a project config the plugin passes a generated one, which Pyrefly would name in the
+    # hint; the user sees the hint Pyrefly prints when there is no config.
+    rule_runner.write_files(
+        {
+            "src/project/hint.py": "import hint_module_that_does_not_exist_pyrefly\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="hint.py"))
+    result = run_pyrefly(rule_runner, [tgt])
+    assert result[0].exit_code == 1
+    combined = result[0].stdout + result[0].stderr
+    assert "Looked in these locations:" in combined, combined
+    assert "__pyrefly_config" not in combined, combined
+
+
+def test_update_baseline_full_format_without_config_names_no_config(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # A Pyrefly < 1.3 baseline's `description` holds the whole hint, so without a project config it
+    # must not name the generated one either (or it would change once on upgrading the plugin).
+    rule_runner.write_files(
+        {
+            "src/project/bl_hint.py": "import baseline_module_that_does_not_exist_pyrefly\n",
+            "src/project/BUILD": "python_sources()",
+        }
+    )
+    result = rule_runner.run_goal_rule(
+        PyreflyUpdateBaseline,
+        args=["--pyrefly-version=1.2.0", "--pyrefly-baseline=bl.json", "src/project:"],
+        env_inherit=_ENV_INHERIT,
+    )
+    assert result.exit_code == 0
+    with open(os.path.join(rule_runner.build_root, "bl.json")) as fh:
+        raw = fh.read()
+    assert "__pyrefly_config" not in raw, raw
+    hints = [e["description"] for e in json.loads(raw)["errors"] if e["name"] == "missing-import"]
+    assert len(hints) == 1
+    assert "Looked in these locations:" in hints[0], hints
+
+
+def test_has_pyrefly_table() -> None:
+    assert _has_pyrefly_table(b"[tool.pyrefly]\n")
+    assert _has_pyrefly_table(b"[tool.pyrefly.errors]\nbad-assignment = false\n")
+    assert not _has_pyrefly_table(b"[tool.ruff]\n# [tool.pyrefly]\n")
+    assert not _has_pyrefly_table(b'[project]\nname = "x"\n')
+    # Not valid TOML: still passed, so Pyrefly reports the parse error.
+    assert _has_pyrefly_table(b"[tool.pyrefly\n")
+    # A leading BOM is valid for Pyrefly, so it must not count as invalid TOML.
+    assert not _has_pyrefly_table(b'\xef\xbb\xbf[project]\nname = "x"\n# [tool.pyrefly]\n')
+    assert _has_pyrefly_table(b"\xef\xbb\xbf[tool.pyrefly]\n")
+
+
+def test_pyproject_that_only_mentions_pyrefly_keeps_basic_preset(
+    rule_runner: PythonRuleRunner,
+) -> None:
+    # Pyrefly treats a `pyproject.toml` without a `[tool.pyrefly]` table as no config and uses
+    # `basic`, which does not flag this; passed as `--config`, it would get the stricter default.
+    rule_runner.write_files(
+        {
+            "src/project/mentions.py": 'mentions: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": '[project]\nname = "x"\n# [tool.pyrefly]\n',
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="mentions.py"))
+    assert run_pyrefly(rule_runner, [tgt])[0].exit_code == 0
+
+
+def test_has_config_flag() -> None:
+    for args in (
+        ["--config", "x"],
+        ["--config=x"],
+        ["-c", "x"],
+        ["-c=x"],
+        ["-cx"],
+        ["--min-severity=warn", "-c", "x"],
+    ):
+        assert _has_config_flag(args), args
+    for args in ([], ["--configure"], ["--check-unannotated-defs"], ["x.toml"]):
+        assert not _has_config_flag(args), args
+
+
+_USER_CONFIG_ARGS = [
+    pytest.param(["--config", "pyproject.toml"], id="long-separate"),
+    pytest.param(["--config=pyproject.toml"], id="long-equals"),
+    pytest.param(["-c", "pyproject.toml"], id="short-separate"),
+    pytest.param(["-cpyproject.toml"], id="short-attached"),
+]
+
+
+@pytest.mark.parametrize("user_args", _USER_CONFIG_ARGS)
+def test_user_config_arg_replaces_discovered_config(
+    rule_runner: PythonRuleRunner, user_args: list[str]
+) -> None:
+    # Pyrefly rejects a repeated `--config`, so a config the user passes in `[pyrefly].args` is
+    # the only one Pyrefly gets.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": "[tool.pyrefly]\n",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    argv = first_pyrefly_process(
+        rule_runner, [tgt], extra_args=[f"--pyrefly-args={user_args!r}"]
+    ).argv
+    assert [arg for arg in argv if _has_config_flag([arg])] == user_args[:1]
+
+
+@pytest.mark.parametrize(
+    "subcommand", [("suppress",), ("coverage", "report"), ("dump-config",)], ids=" ".join
+)
+def test_user_config_arg_does_not_reach_other_subcommands(
+    rule_runner: PythonRuleRunner, subcommand: tuple[str, ...]
+) -> None:
+    # `[pyrefly].args` are only passed to `check`, so a `--config` there must not stop the other
+    # subcommands from getting the project's config. The user's config is a different file, so the
+    # assertion tells the two apart.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": "x = 1\n",
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": "[tool.pyrefly]\n",
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    argv = first_pyrefly_process(
+        rule_runner,
+        [tgt],
+        extra_args=["--pyrefly-args=['--config=build-support/pyrefly.toml']"],
+        subcommand=subcommand,
+    ).argv
+    assert [arg for arg in argv if _has_config_flag([arg])] == ["--config=pyproject.toml"]
+
+
+@pytest.mark.parametrize("user_args", _USER_CONFIG_ARGS[1:3])
+def test_user_config_arg_runs_with_discovered_config(
+    rule_runner: PythonRuleRunner, user_args: list[str]
+) -> None:
+    # The same setup end to end: Pyrefly accepts the command and checks with the user's config.
+    rule_runner.write_files(
+        {
+            "src/project/f.py": 'x: int = "not an int"\n',
+            "src/project/BUILD": "python_sources()",
+            "pyproject.toml": '[tool.pyrefly]\npreset = "legacy"\n',
+        }
+    )
+    tgt = rule_runner.get_target(Address("src/project", relative_file_path="f.py"))
+    result = run_pyrefly(rule_runner, [tgt], extra_args=[f"--pyrefly-args={user_args!r}"])
+    assert result[0].exit_code == 1
+    assert "bad-assignment" in result[0].stdout
+
+
+def test_config_sub_config_paths_still_match(rule_runner: PythonRuleRunner) -> None:
+    # Passing the discovered config as `--config` must not change how its settings apply to the
+    # files Pants hands Pyrefly: a `sub-config` still applies to its directory only.
+    missing = "import a_module_that_truly_does_not_exist_pyrefly\n"
+    rule_runner.write_files(
+        {
+            "src/project/strict/f.py": missing,
+            "src/project/strict/BUILD": "python_sources()",
+            "src/project/loose/f.py": missing,
+            "src/project/loose/BUILD": "python_sources()",
+            "pyproject.toml": (
+                "[tool.pyrefly]\n"
+                "[[tool.pyrefly.sub-config]]\n"
+                'matches = "**/loose/**"\n'
+                "[tool.pyrefly.sub-config.errors]\n"
+                "missing-import = false\n"
+            ),
+        }
+    )
+    targets = [
+        rule_runner.get_target(Address(f"src/project/{d}", relative_file_path="f.py"))
+        for d in ("strict", "loose")
+    ]
+    result = run_pyrefly(rule_runner, targets)
+    assert len(result) == 1
+    assert result[0].exit_code == 1
+    assert "src/project/strict/f.py" in result[0].stdout
+    assert "src/project/loose/f.py" not in result[0].stdout
 
 
 def test_args_passthrough(rule_runner: PythonRuleRunner) -> None:
@@ -961,8 +1320,10 @@ _ANSI_SGR = re.compile(r"\x1b\[[0-9;:]*m")
 
 
 def _assert_no_synthetic_root(text: str) -> None:
-    """No synthetic root name anywhere in `text`, apart from the deliberate lookalike literal."""
+    """No plugin-internal name in `text`: no synthetic root, apart from the deliberate lookalike
+    literal, and no generated config in a missing-import hint."""
     assert "__pyrefly_root_" not in text.replace(_LOOKALIKE, ""), text
+    assert "__pyrefly_config" not in text, text
 
 
 # Three source roots: the build root (`scripts/`), `lib`, and `src/python`. `app` imports `util`

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import PurePath
@@ -23,6 +24,7 @@ from pants.backend.python.util_rules.partition import (
     _partition_by_interpreter_constraints_and_resolve,
 )
 from pants.backend.python.util_rules.pex import Pex, PexRequest, create_pex, create_venv_pex
+from pants.backend.python.util_rules.pex_environment import find_pex_python
 from pants.backend.python.util_rules.pex_from_targets import RequirementsPexRequest
 from pants.backend.python.util_rules.pex_requirements import PexRequirements
 from pants.backend.python.util_rules.python_sources import (
@@ -155,6 +157,18 @@ async def pyrefly_determine_partitions(
         )
     )
 
+
+# The config the plugin writes into the sandbox when the project gives it none to pass: what Pyrefly
+# itself falls back to when it finds no config (the `basic` preset). Any name but `pyproject.toml`
+# is parsed as a `pyrefly.toml`.
+_GENERATED_CONFIG = "__pyrefly_config.toml"
+_GENERATED_CONFIG_CONTENT = b'preset = "basic"\n'
+# A missing-import hint names the config its search path came from ("Looked in these locations
+# (from config in `<sandbox>/__pyrefly_config.toml`):"). For the generated config that is a file the
+# user does not have, and Pyrefly prints no such clause without a config, so drop it.
+_GENERATED_CONFIG_CLAUSE = re.compile(
+    rf" \(from config in `[^`]*/{re.escape(_GENERATED_CONFIG)}`\)"
+)
 
 # Fixed sandbox path where `--update-baseline` writes the baseline; the update-baseline goal
 # relocates it to the user's configured `[pyrefly].baseline` path on write-back.
@@ -385,7 +399,11 @@ def _remap_text(text: str, synth_root_to_real: FrozenDict[str, str]) -> str:
     `a.__pyrefly_root_1`, and `__pyrefly_root_1.sub`. The one exception is a name directly after an
     ANSI color code (`\x1b[...m`, e.g. under `--color=always`), whose final `m` would otherwise
     look like part of a word; the code is kept as-is.
+
+    Also drops the clause naming the generated config from missing-import hints (see
+    `_GENERATED_CONFIG_CLAUSE`), whether or not sources were re-staged.
     """
+    text = _GENERATED_CONFIG_CLAUSE.sub("", text)
     if not synth_root_to_real:
         return text
     # Longest name first, so no name can win over a longer one it prefixes.
@@ -522,6 +540,35 @@ async def _partition_baseline(
     return await create_digest(CreateDigest(out))
 
 
+def _has_config_flag(args: Iterable[str]) -> bool:
+    """Whether `args` sets Pyrefly's config: `--config x`, `--config=x`, `-c x` or `-cx`."""
+    return any(_is_flag(arg, "--config") or arg.startswith("-c") for arg in args)
+
+
+def _discovered_config(files: Iterable[str]) -> str | None:
+    """The discovered config Pyrefly itself would use: `pyrefly.toml` wins over `pyproject.toml`."""
+    for name in ("pyrefly.toml", "pyproject.toml"):
+        if name in files:
+            return name
+    return None
+
+
+def _has_pyrefly_table(pyproject: bytes) -> bool:
+    """Whether a `pyproject.toml` really has a `[tool.pyrefly]` table.
+
+    Discovery only matches the text `[tool.pyrefly`, which a comment also contains. Pyrefly treats
+    a `pyproject.toml` without the table as no config, so passing it as `--config` would switch to
+    the stricter `default` preset. One that does not parse is still passed, so Pyrefly reports why.
+    """
+    try:
+        # `utf-8-sig`: Pyrefly accepts a leading BOM, `tomllib` does not.
+        data = tomllib.loads(pyproject.decode("utf-8-sig"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return True
+    tool = data.get("tool")
+    return isinstance(tool, dict) and "pyrefly" in tool
+
+
 async def _setup_pyrefly_process(
     partition: PyreflyPartition,
     pyrefly: Pyrefly,
@@ -595,6 +642,11 @@ async def _setup_pyrefly_process(
             )
         )
     )
+    # The venv's Python shim runs the venv out of the sandbox's `.cache/pex_root`, rebuilding it
+    # there if it is missing. Pants' own `VenvPexProcess` mounts the shared `pex_root` named cache
+    # at that path; we build our `Process` by hand, so mount it ourselves. Without it, every run
+    # rebuilds the entire third-party venv before Pyrefly starts.
+    pex_environment = await find_pex_python(**implicitly())
 
     is_check = subcommand == ("check",)
 
@@ -680,9 +732,29 @@ async def _setup_pyrefly_process(
     # Pass the files to check via an argfile rather than argv, so we never hit OS command-line
     # length limits on targets with many files (Pyrefly reads `@<file>`, like other clap CLIs).
     file_list_path = "__pyrefly_files.txt"
-    file_list_digest = await create_digest(
-        CreateDigest([FileContent(file_list_path, "\n".join(reported_files).encode())])
-    )
+    generated_files = [FileContent(file_list_path, "\n".join(reported_files).encode())]
+
+    # Pin one config for every file Pyrefly loads, as `pyrefly check` does in project mode and as
+    # Pyrefly's own Bazel and Buck integrations do. Passing files explicitly otherwise makes Pyrefly
+    # search upward from each file for its own config, and third-party files live in the
+    # `pex_root` named cache outside the sandbox: they would get whatever config sits above that
+    # cache, or one migrated from a `mypy.ini` a wheel ships, instead of the project's. An explicit
+    # or discovered config is materialized into the input digest below; with neither, we generate
+    # the config Pyrefly falls back to. A config the user passes in `[pyrefly].args` wins instead
+    # (Pyrefly rejects a repeated `--config`), but those args only reach `check`.
+    config_path: str | None = None
+    if not (is_check and _has_config_flag(pyrefly.args)):
+        config_path = pyrefly.config or _discovered_config(config_file_snapshot.snapshot.files)
+        if config_path == "pyproject.toml" and not pyrefly.config:
+            contents = await get_digest_contents(config_file_snapshot.snapshot.digest)
+            if not any(
+                fc.path == config_path and _has_pyrefly_table(fc.content) for fc in contents
+            ):
+                config_path = None
+        if not config_path:
+            config_path = _GENERATED_CONFIG
+            generated_files.append(FileContent(_GENERATED_CONFIG, _GENERATED_CONFIG_CONTENT))
+    generated_digest = await create_digest(CreateDigest(generated_files))
 
     input_digest = await merge_digests(
         MergeDigests(
@@ -690,7 +762,7 @@ async def _setup_pyrefly_process(
                 *source_digests,
                 config_file_snapshot.snapshot.digest,
                 requirements_venv_pex.digest,
-                file_list_digest,
+                generated_digest,
                 baseline_digest,
             )
         )
@@ -711,10 +783,9 @@ async def _setup_pyrefly_process(
     argv.append(f"--python-interpreter-path={requirements_venv_pex.python.argv0}")
     if python_version:
         argv.append(f"--python-version={python_version}")
-    # An explicitly-configured config file. Discovered configs are found by Pyrefly itself
-    # relative to the sandbox cwd; both are materialized into the input digest above.
-    if pyrefly.config:
-        argv.append(f"--config={pyrefly.config}")
+    # The one config every file uses (see above).
+    if config_path:
+        argv.append(f"--config={config_path}")
     if is_check:
         # `check`-only flags; `coverage report`/`check` do not accept these.
         if pyrefly.output_format:
@@ -740,7 +811,10 @@ async def _setup_pyrefly_process(
         argv=tuple(argv),
         input_digest=input_digest,
         immutable_input_digests={tool_key: downloaded_pyrefly.digest},
-        append_only_caches=requirements_venv_pex.append_only_caches or {},
+        append_only_caches={
+            **pex_environment.in_sandbox(working_directory=None).append_only_caches,
+            **(requirements_venv_pex.append_only_caches or {}),
+        },
         output_files=output_files,
         description=f"Run Pyrefly on {pluralize(len(root_sources.snapshot.files), 'file')}.",
         level=LogLevel.DEBUG,
