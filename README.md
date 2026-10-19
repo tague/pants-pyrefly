@@ -22,7 +22,7 @@ Add the plugin and enable its backend in `pants.toml`:
 
 ```toml
 [GLOBAL]
-plugins = ["pants-pyrefly==1.1.0"]
+plugins = ["pants-pyrefly==1.1.1"]
 backend_packages.add = [
     "pants.backend.python",
     "pants_pyrefly",
@@ -231,6 +231,7 @@ or interpreter constraints, each partition's config is printed under its own hea
 
 | Plugin version | Pants | Pyrefly (default) |
 | --- | --- | --- |
+| `1.1.1` | `2.27`–`2.33` | `1.4.0` |
 | `1.1.0` | `2.27`–`2.33` | `1.3.2` |
 | `1.0.0` | `2.27`–`2.33` | `1.2.0` |
 | `0.5.0` | `2.27`–`2.32` | `1.1.1` |
@@ -270,7 +271,7 @@ Selecting a denylisted version fails with the recorded reason rather than a gene
 `UnknownVersion`, and suggests the plugin's default:
 
 ```
-DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.3.2).
+DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.4.0).
 ```
 
 To use a denylisted version anyway, supply your own `[pyrefly].known_versions` entry for it on

@@ -3,6 +3,27 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 1.1.1 (2026-10-19)
+
+Pins Pyrefly 1.4.0 and makes it the default. No plugin code changes: the goals, `[pyrefly]`
+options, and `skip_pyrefly` field behave as before. Every version pinned in 1.1.0 is still pinned;
+to stay on the old default, set `[pyrefly].version = "1.3.2"`.
+
+- **The default pinned Pyrefly is now 1.4.0** (was 1.3.2). The newer Pyrefly changes what some
+  builds report (see the
+  [Pyrefly 1.4.0 release notes](https://github.com/facebook/pyrefly/releases/tag/1.4.0)):
+  - **Stricter checks on by default** can surface errors 1.3.2 did not report, e.g. TypeVar
+    bounds and constraints are now enforced when the expected type contains `Any`, and `@property`
+    getters with extra required parameters are flagged. Many false positives are also fixed, so
+    some `# pyrefly: ignore` comments and baseline entries may become unused.
+  - **Renamed error kind.** `incompatible-overload-residual` is now `incompatible-overload-argument`.
+    Pyrefly keeps the old name as a deprecated alias.
+  - **`--typeshed-path` replaces the bundled typeshed** instead of overlaying it. This matters only
+    if you pass it through `[pyrefly].args`.
+  - **New opt-in error kinds** (`unknown-attribute-access`, `unknown-return-type`,
+    `untyped-function-decorator`, `uninitialized-instance-variable`, and others) are off unless
+    you enable them in `[errors]`.
+
 ## 1.1.0 (2026-10-07)
 
 `pants check` no longer rebuilds the third-party venv on every Pyrefly run, which on a large
