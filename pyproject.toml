@@ -3,6 +3,31 @@
 
 [tool.ruff]
 line-length = 100
+# The `python-default` resolve's floor in pants.toml, so pyupgrade suggests no 3.11-only rewrites
+# in the example project or build-support scripts.
+target-version = "py310"
+# The plugin runs on Pants' own interpreter, 3.11+ (the wheel's `python_requires`). Without this,
+# the import sorter files the stdlib `tomllib` under third-party.
+per-file-target-version = { "pants-plugins/**" = "py311" }
+
+[tool.ruff.lint.isort]
+# Source roots (pants.toml `[source].root_patterns`), which Ruff cannot see on its own.
+known-first-party = ["pants_pyrefly", "generate_known_versions", "example"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade: drop idioms the target Python has replaced
+    "B",    # flake8-bugbear: likely bugs (mutable defaults, loop-variable closures, ...)
+    "RUF",  # Ruff-specific: invisible/confusable characters, unused `noqa`, ...
+]
+ignore = [
+    # Pants subsystems declare options and defaults as class-level lists (e.g.
+    # `default_known_versions`); annotating each as `ClassVar` is noise.
+    "RUF012",
+    # `[*a, b]` over `a + [b]` is a style preference, not a defect.
+    "RUF005",
+]

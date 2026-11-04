@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from pants_pyrefly import goals
-from pants_pyrefly import rules as pyrefly_rules
-from pants_pyrefly import skip_field, subsystems
 from pants.engine.rules import Rule
 from pants.engine.unions import UnionRule
+
+from pants_pyrefly import goals, skip_field, subsystems
+from pants_pyrefly import rules as pyrefly_rules
 
 
 def rules() -> Iterable[Rule | UnionRule]:

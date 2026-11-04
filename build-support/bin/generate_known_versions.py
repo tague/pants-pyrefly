@@ -374,7 +374,7 @@ def render_known_versions_block(pins: list[str]) -> list[str]:
 
 
 def _split(text: str) -> list[str]:
-    # Split on "\n" only (not str.splitlines, which also splits on \x0c,  , ...), so joining
+    # Split on "\n" only (not str.splitlines, which also splits on \x0c, \u2028, ...), so joining
     # with "\n" reproduces the file byte for byte.
     return text.split("\n")
 
