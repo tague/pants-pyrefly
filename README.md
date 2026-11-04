@@ -400,7 +400,7 @@ The [compatibility workflow](.github/workflows/compat.yml) runs the script in se
 
 - one per supported Pyrefly version (`--list-versions`), on this repo's Pants;
 - one per supported Pants minor, at its latest stable patch (2.27.1, 2.28.1, 2.29.1, 2.30.2,
-  2.31.0, 2.32.1, and 2.33.1), with the default Pyrefly version (`--default-version`);
+  2.31.0, 2.32.2, and 2.33.2), with the default Pyrefly version (`--default-version`);
 - one with the default Pyrefly on this repo's Pants, against a `CPython==3.9.*` project.
 
 It runs on demand and as a required step of the release workflow, so if any job fails, nothing is

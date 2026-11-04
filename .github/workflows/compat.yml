@@ -70,7 +70,7 @@ jobs:
       fail-fast: false
       matrix:
         # Latest stable patch of every supported Pants minor (2.27-2.33).
-        pants-version: ["2.27.1", "2.28.1", "2.29.1", "2.30.2", "2.31.0", "2.32.1", "2.33.1"]
+        pants-version: ["2.27.1", "2.28.1", "2.29.1", "2.30.2", "2.31.0", "2.32.2", "2.33.2"]
     steps:
       - uses: actions/checkout@v7
 
