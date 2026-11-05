@@ -6,7 +6,8 @@ name: Pyrefly compatibility
 #   - `compat-pants`: the default Pyrefly version on every supported Pants minor (latest stable
 #     patch of each);
 #   - `compat-python39`: the default Pyrefly version on this repo's Pants, checking a project
-#     constrained to `CPython==3.9.*`.
+#     constrained to `CPython==3.9.*`;
+#   - `compat-python315`: the same, for a project constrained to `CPython==3.15.*`.
 # It gates releases: release.yml calls this workflow and the PyPI publish job needs it, so every
 # job must pass. It also runs on demand. Deliberately not run on pull requests or on a
 # schedule.
@@ -125,4 +126,34 @@ jobs:
         env:
           COMPAT_INTERPRETER_CONSTRAINTS: "CPython==3.9.*"
           COMPAT_PYTHON_VERSION: "3.9"
+        run: bash build-support/ci/compat_test.sh "${{ needs.versions.outputs.default }}"
+
+  compat-python315:
+    name: compat (Python 3.15 project, Pyrefly ${{ needs.versions.outputs.default }})
+    needs: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # As compat-python39: the third-party venv needs a real Python 3.15. Pants runs on its own
+      # bundled interpreter.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: |
+            3.14
+            3.15
+
+      - uses: pantsbuild/actions/init-pants@v11
+        with:
+          gha-cache-key: compat-python315-v0
+          named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
+
+      # No Pants release lists 3.15 in its default `[python].interpreter_versions_universe`, so
+      # without an explicit universe Pants cannot compute the project's minimum Python and the
+      # plugin passes no `--python-version`.
+      - name: Compatibility test (Python 3.15 project)
+        env:
+          COMPAT_INTERPRETER_CONSTRAINTS: "CPython==3.15.*"
+          COMPAT_PYTHON_VERSION: "3.15"
+          COMPAT_INTERPRETER_VERSIONS_UNIVERSE: "3.9 3.10 3.11 3.12 3.13 3.14 3.15"
         run: bash build-support/ci/compat_test.sh "${{ needs.versions.outputs.default }}"

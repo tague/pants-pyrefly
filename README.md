@@ -15,6 +15,10 @@ that imports resolve correctly.
 - The **published wheel** is pure-Python — `Requires-Python: >=3.11`, with **no `pantsbuild.pants`
   dependency** (Pants provides itself at runtime) — so a single release installs into any supported
   Pants, from 2.27 (CPython 3.11) through 2.33 (CPython 3.14).
+- **Your code** can target Python 3.9 through 3.15. For Python 3.15, use Pants 2.31 or newer (the
+  pex bundled with older Pants cannot run on 3.15) and add `"3.15"` to
+  `[python].interpreter_versions_universe`, which no Pants release includes yet. Without it, Pants
+  cannot compute a 3.15 project's minimum Python, so the plugin passes no `--python-version`.
 
 ## Installation
 
@@ -394,14 +398,17 @@ The script runs under this repo's Pants with a `CPython>=3.11,<3.15` project by 
 `COMPAT_PYTHON_VERSION` (the constraints' minimum) to check another Python. The project needs a
 real interpreter matching its constraints, since the plugin builds the third-party venv Pyrefly
 inspects with one. When the minimum is older than 3.10, the script also checks that a `match`
-statement fails with `invalid-syntax`.
+statement fails with `invalid-syntax`. For a Python newer than Pants' default
+`[python].interpreter_versions_universe`, also set `COMPAT_INTERPRETER_VERSIONS_UNIVERSE`
+(space-separated, e.g. `"3.9 3.10 3.11 3.12 3.13 3.14 3.15"`).
 
 The [compatibility workflow](.github/workflows/compat.yml) runs the script in separate jobs:
 
 - one per supported Pyrefly version (`--list-versions`), on this repo's Pants;
 - one per supported Pants minor, at its latest stable patch (2.27.1, 2.28.1, 2.29.1, 2.30.2,
   2.31.0, 2.32.2, and 2.33.2), with the default Pyrefly version (`--default-version`);
-- one with the default Pyrefly on this repo's Pants, against a `CPython==3.9.*` project.
+- one with the default Pyrefly on this repo's Pants, against a `CPython==3.9.*` project;
+- one with the default Pyrefly on this repo's Pants, against a `CPython==3.15.*` project.
 
 It runs on demand and as a required step of the release workflow, so if any job fails, nothing is
 published. It does not run on pull requests.

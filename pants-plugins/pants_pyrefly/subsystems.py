@@ -203,7 +203,7 @@ class Pyrefly(TemplatedExternalTool):
 
     _interpreter_constraints = StrListOption(
         advanced=True,
-        default=["CPython>=3.9,<3.15"],
+        default=["CPython>=3.9,<3.16"],
         help="Fallback interpreter constraints to use when a target has none of its own.",
     )
 
