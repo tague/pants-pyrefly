@@ -15,38 +15,9 @@ from pathlib import Path
 
 import pytest  # pants: no-infer-dep
 import toml  # pants: no-infer-dep
-
-from pants_pyrefly.goals import (
-    PyreflyCoverage,
-    PyreflyDumpConfig,
-    PyreflyInit,
-    PyreflyLspConfig,
-    PyreflySuppress,
-    PyreflyUpdateBaseline,
-)
-from pants_pyrefly.register import rules as pyrefly_register_rules
-from pants_pyrefly.rules import (
-    PyreflyFieldSet,
-    PyreflyRequest,
-    _dedupe_search_path_roots,
-    _discovered_config,
-    _has_pyrefly_table,
-    _has_config_flag,
-    _filter_baseline_entries,
-    _has_flag,
-    _plan_restage,
-    _real_prefix,
-    _remap_path,
-    _remap_text,
-    _setup_pyrefly_process,
-    pyrefly_determine_partitions,
-)
-from pants_pyrefly import subsystems
-from pants_pyrefly.subsystems import Pyrefly
-
 from pants.backend.python import target_types_rules
-from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.dependency_inference import rules as dependency_inference_rules
+from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.target_types import (
     PythonRequirementTarget,
     PythonSourcesGeneratorTarget,
@@ -63,6 +34,34 @@ from pants.engine.rules import QueryRule, collect_rules, implicitly, rule
 from pants.engine.target import Target
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.util.frozendict import FrozenDict
+
+from pants_pyrefly import subsystems
+from pants_pyrefly.goals import (
+    PyreflyCoverage,
+    PyreflyDumpConfig,
+    PyreflyInit,
+    PyreflyLspConfig,
+    PyreflySuppress,
+    PyreflyUpdateBaseline,
+)
+from pants_pyrefly.register import rules as pyrefly_register_rules
+from pants_pyrefly.rules import (
+    PyreflyFieldSet,
+    PyreflyRequest,
+    _dedupe_search_path_roots,
+    _discovered_config,
+    _filter_baseline_entries,
+    _has_config_flag,
+    _has_flag,
+    _has_pyrefly_table,
+    _plan_restage,
+    _real_prefix,
+    _remap_path,
+    _remap_text,
+    _setup_pyrefly_process,
+    pyrefly_determine_partitions,
+)
+from pants_pyrefly.subsystems import Pyrefly
 
 # Inherited so Pants can discover system interpreters and download the Pyrefly binary.
 _ENV_INHERIT = {"PATH", "PYENV_ROOT", "HOME"}

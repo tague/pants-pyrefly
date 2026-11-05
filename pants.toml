@@ -38,3 +38,16 @@ root_patterns = [
     "/testprojects/src",
     "/build-support/bin",
 ]
+
+[ruff]
+# Pinned ahead of the Ruff that Pants bundles (0.14.14 in Pants 2.33). Setting `known_versions`
+# replaces Pants' built-in list, so it must cover every platform for the pinned version. Bump by
+# hand (Dependabot cannot): sizes and sha256 digests are on the release's
+# `ruff-{aarch64,x86_64}-{unknown-linux-musl,apple-darwin}.tar.gz` assets.
+version = "0.17.3"
+known_versions = [
+    "0.17.3|linux_arm64|650d5991fea0baf8a5ee17672a3b20c45ac238ac85fa09077d66ef0cec31cdcf|9574296",
+    "0.17.3|linux_x86_64|85e76bbb60e708a22624b31efb227e8bdaa6978177b93c146d352de4caf37ba1|10407681",
+    "0.17.3|macos_arm64|118f7121aa838785672bf612487f755a89108bb5f44e0f3df96c5967a72614f9|9356803",
+    "0.17.3|macos_x86_64|17f95b1bee24d70de62ffe5beec7f71bb541c7e3d147a1c3d84f7cd6525f6fdf|10117731",
+]

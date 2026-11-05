@@ -7,7 +7,6 @@ import http.client
 import io
 import json
 import shlex
-import socket
 import subprocess
 import sys
 import urllib.error
@@ -501,7 +500,7 @@ def test_token_is_sent_only_to_the_api_and_never_redirected(monkeypatch) -> None
         lambda url: _http_error(url, 503),
         lambda url: _http_error(url, 429),
         lambda url: urllib.error.URLError(ConnectionRefusedError("refused")),
-        lambda url: socket.timeout("timed out"),
+        lambda url: TimeoutError("timed out"),
     ],
 )
 def test_transient_failures_are_retried_with_backoff(monkeypatch, sleeps, failure) -> None:
@@ -609,7 +608,7 @@ def test_reason_literal_uses_ruff_preferred_quotes(tmp_path, reason, literal) ->
     assert _config(path).denylist == {"1.2.1": reason}
 
 
-@pytest.mark.parametrize("bad", ["two\nlines", "tab\there", "nul\x00", "cr\rhere", "sep x"])
+@pytest.mark.parametrize("bad", ["two\nlines", "tab\there", "nul\x00", "cr\rhere", "sep\u2028x"])
 def test_reason_must_be_a_single_line(tmp_path, capsys, bad) -> None:
     path = _write_subsystems(tmp_path, _pins(_ALL_IN_RANGE))
     before = path.read_text(encoding="utf-8")
@@ -705,7 +704,6 @@ def test_write_with_version_changes_only_the_version_literal(fake_github, tmp_pa
 
 
 def test_write_appends_after_a_last_pin_without_trailing_comma(fake_github, tmp_path) -> None:
-    p121_mac, p121_linux = _pins(["1.2.1"])
     original = _w6_text().replace(
         f'        "{_pins(["1.1.1"])[1]}",\n', f'        "{_pins(["1.1.1"])[1]}"  # last\n'
     )
