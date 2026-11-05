@@ -3,6 +3,15 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **Python 3.15 projects are supported** on Pants 2.31 and newer, once `"3.15"` is added to
+  `[python].interpreter_versions_universe` (no Pants release includes it yet). The compatibility
+  suite now checks a `CPython==3.15.*` project. On Pants 2.27–2.30, the pex that Pants bundles
+  cannot run on Python 3.15, so Pants fails before Pyrefly runs.
+- The `[pyrefly].interpreter_constraints` fallback, used only for a target with no interpreter
+  constraints of its own, is now `CPython>=3.9,<3.16` (was `<3.15`).
+
 ## 1.1.1 (2026-10-19)
 
 Pins Pyrefly 1.4.0 and makes it the default. No plugin code changes: the goals, `[pyrefly]`

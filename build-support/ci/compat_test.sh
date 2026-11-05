@@ -37,6 +37,12 @@
 #   COMPAT_PYTHON_VERSION          the minimum Python those constraints allow, i.e. the
 #                                  `--python-version` the plugin must pass (default: 3.11). Set it
 #                                  together with COMPAT_INTERPRETER_CONSTRAINTS.
+#   COMPAT_INTERPRETER_VERSIONS_UNIVERSE
+#                                  space-separated `[python].interpreter_versions_universe` for
+#                                  the test project (default: Pants' own). Needed for a Python
+#                                  newer than Pants' default universe, e.g. "3.11 3.12 3.13 3.14
+#                                  3.15": without it Pants cannot compute the minimum version, so
+#                                  the plugin passes no `--python-version`.
 #   COMPAT_PANTS_PYREFLY_VERSION   self-test only: the version actually passed to Pants, while the
 #                                  script still expects <version>. Pointing it at a different
 #                                  release must make the script fail on the version assertion.
@@ -66,6 +72,11 @@ PYTHON_VERSION="${COMPAT_PYTHON_VERSION:-3.11}"
 [[ "$PYTHON_VERSION" =~ ^3\.[0-9]+$ ]] ||
   { echo "COMPAT_PYTHON_VERSION must be 3.N, got '${PYTHON_VERSION}'" >&2; exit 2; }
 PYTHON_MINOR="${PYTHON_VERSION#3.}"
+UNIVERSE_LINE=""
+if [[ -n "${COMPAT_INTERPRETER_VERSIONS_UNIVERSE:-}" ]]; then
+  read -ra universe <<<"$COMPAT_INTERPRETER_VERSIONS_UNIVERSE"
+  UNIVERSE_LINE="interpreter_versions_universe = [$(printf '"%s", ' "${universe[@]}")]"
+fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pyrefly-compat.XXXXXX")"
 PROJECT="${WORK}/project"
@@ -97,6 +108,7 @@ backend_packages = ["pants.backend.python", "pants_pyrefly"]
 
 [python]
 interpreter_constraints = ["${INTERPRETER_CONSTRAINTS}"]
+${UNIVERSE_LINE}
 
 [python-repos]
 indexes = ["https://pypi.org/simple/"]
