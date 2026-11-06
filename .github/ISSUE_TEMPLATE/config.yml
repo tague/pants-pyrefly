@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Pyrefly type-checking bug
+    url: https://github.com/facebook/pyrefly/issues
+    about: A wrong or missing type error that Pyrefly also reports when run directly, outside Pants.
+  - name: Pants bug or question
+    url: https://github.com/pantsbuild/pants/issues
+    about: Problems with Pants itself that aren't specific to this plugin.
