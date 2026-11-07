@@ -1,0 +1,135 @@
+name: Bug report
+description: Something in the pants-pyrefly plugin doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        This tracker is for the **Pants plugin**: how Pants downloads and runs Pyrefly, import
+        resolution and source roots, partitioning by resolve or interpreter, and the `pyrefly-*`
+        goals. If Pyrefly reports a wrong type error that it also reports when run directly
+        (outside Pants) on the same code, please file it with
+        [Pyrefly](https://github.com/facebook/pyrefly/issues) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including the full error output.
+      placeholder: |
+        `pants check ::` fails with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The smallest setup that shows the problem: the command you ran, plus the relevant
+        `BUILD` files and source layout. A link to a minimal repository is ideal.
+      placeholder: |
+        1. `pants.toml` with the config below
+        2. `src/app/main.py` containing ...
+        3. Run `pants check src/app::`
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: pants-pyrefly version
+      description: The version in `[GLOBAL].plugins`, or the commit if you vendor the plugin.
+      placeholder: "1.x.y"
+    validations:
+      required: true
+
+  - type: input
+    id: pants-version
+    attributes:
+      label: Pants version
+      description: Output of `pants --version`.
+      placeholder: "2.x.y"
+    validations:
+      required: true
+
+  - type: input
+    id: pyrefly-version
+    attributes:
+      label: Pyrefly version
+      description: "`[pyrefly].version` if you set it, otherwise \"default\"."
+      placeholder: "default"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is the plugin installed?
+      options:
+        - From PyPI (`[GLOBAL].plugins`)
+        - Vendored in-repo (`pythonpath`)
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: "macOS 15 arm64, Ubuntu 24.04 x86_64, ..."
+    validations:
+      required: true
+
+  - type: input
+    id: interpreter-constraints
+    attributes:
+      label: Interpreter constraints of the code being checked
+      placeholder: "CPython>=3.11,<3.14"
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: |
+        The `[pyrefly]` and `[python]` sections of `pants.toml`, `[source].root_patterns` (or
+        `marker_filenames`), and your `pyrefly.toml` or `[tool.pyrefly]` if you have one.
+      render: toml
+
+  - type: textarea
+    id: dump-config
+    attributes:
+      label: "`pants pyrefly-dump-config` output"
+      description: |
+        For import-resolution or interpreter problems, run `pants pyrefly-dump-config` on the
+        affected targets. It shows the search paths, interpreter and config file Pants passes to
+        Pyrefly.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug logs
+      description: |
+        If the cause isn't obvious, rerun with `pants -ldebug --keep-sandboxes=on_failure ...`
+        and paste the relevant output. The kept sandbox contains `__run.sh`, which replays the
+        exact Pyrefly command Pants ran.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and this hasn't been reported.
+          required: true
+        - label: I removed secrets and private paths or code from everything above.
+          required: true

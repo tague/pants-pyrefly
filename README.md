@@ -303,6 +303,29 @@ and its format can change between Pyrefly releases), and the sandbox staging mec
 [How import resolution works](#how-import-resolution-works). Dropping a Pants version that has
 reached end of life is a minor bump, not a major one.
 
+## Reporting bugs
+
+First check where the bug belongs:
+
+- **Pyrefly.** If Pyrefly reports the same wrong or missing type error when you run it directly,
+  outside Pants, on the same code, report it to [Pyrefly](https://github.com/facebook/pyrefly/issues).
+- **This plugin.** Anything about how Pants downloads and runs Pyrefly: import resolution and
+  source roots, interpreter or resolve partitioning, the `pyrefly-*` goals, and `[pyrefly]`
+  options. Open a [bug report](https://github.com/tague/pants-pyrefly/issues/new?template=bug_report.yml)
+  here.
+- **Pants.** Problems with Pants itself that aren't specific to Pyrefly go to
+  [Pants](https://github.com/pantsbuild/pants/issues).
+
+The bug report form asks for the plugin, Pants and Pyrefly versions, your platform, and the
+smallest setup that reproduces the bug. Two things usually speed up a fix:
+
+- For import-resolution or interpreter problems, the output of `pants pyrefly-dump-config` on the
+  affected targets (see [Diagnostics](#diagnostics)).
+- For anything else, the output of `pants -ldebug --keep-sandboxes=on_failure ...`. The kept
+  sandbox contains `__run.sh`, which replays the exact Pyrefly command Pants ran.
+
+Remove secrets and private code or paths before posting.
+
 ## Development
 
 This repo dogfoods its own tooling: `ruff` (lint + format) and Pyrefly itself (`check`) run on the
