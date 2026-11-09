@@ -38,6 +38,11 @@ jobs:
           gha-cache-key: v0
           named-caches-hash: ${{ hashFiles('build-support/lockfiles/*.lock') }}
 
+      # Fail before publishing if the CHANGELOG has no section for this tag, since the
+      # `github-release` job needs it for the release notes.
+      - name: Check the CHANGELOG has this release
+        run: python3 build-support/bin/release_notes.py "$GITHUB_REF_NAME" > /dev/null
+
       - name: Build wheel + sdist
         run: pants package pants-plugins/pants_pyrefly:dist
 
@@ -47,3 +52,35 @@ jobs:
           packages-dir: dist/
           # Fail if the artifacts look wrong rather than silently skipping.
           verify-metadata: true
+
+  # The GitHub Release page for the tag, with the tag's CHANGELOG section as its notes. It runs
+  # only after PyPI accepted the release, so a page never announces a version that cannot be
+  # installed. If it fails, the PyPI release stands; re-run this job, or create the page by hand
+  # with the same two commands.
+  github-release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      # Creating a release needs write access to repository contents.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # The notes script is pure stdlib; no Pants needed.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          notes="${RUNNER_TEMP}/release-notes.md"
+          python3 build-support/bin/release_notes.py "$TAG" --repo-url "$REPO_URL" > "$notes"
+          # No `--latest`: GitHub picks Latest by version, so a backport to an older line does not
+          # take it from a newer release.
+          gh release create "$TAG" --verify-tag --title "pants-pyrefly ${TAG#v}" \
+            --notes-file "$notes"

@@ -439,10 +439,15 @@ published. It does not run on pull requests.
 
 ## Releasing
 
-Push a `vX.Y.Z` tag. The [release workflow](.github/workflows/release.yml) first runs the
+Add a `## X.Y.Z (date)` section to the [CHANGELOG](CHANGELOG.md), then push a `vX.Y.Z` tag. The
+[release workflow](.github/workflows/release.yml) first runs the
 [Pyrefly compatibility suite](#pyrefly-compatibility-suite) (every supported Pyrefly version, and
 every supported Pants minor), then builds the wheel and publishes it to PyPI using [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC,
 no API tokens). Configure a PyPI trusted publisher for this repo + the `release.yml` workflow first.
+Once PyPI has the release, the workflow creates its
+[GitHub Release](https://github.com/tague/pants-pyrefly/releases), with that CHANGELOG section as
+the notes (`build-support/bin/release_notes.py` extracts it). A tag with no CHANGELOG section fails
+before anything is published.
 
 ## License
 
