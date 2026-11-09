@@ -3,8 +3,18 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.2.0 (2026-11-09)
 
+Adds support for Python 3.15 projects and makes Pyrefly 1.4.1 the default. No breaking changes:
+the goals, `[pyrefly]` options, and `skip_pyrefly` field behave as before, and every version
+pinned in 1.1.1 is still pinned. To stay on the old default, set `[pyrefly].version = "1.4.0"`.
+
+- **Python 3.15 projects are supported** on Pants 2.31 and newer, once `"3.15"` is added to
+  `[python].interpreter_versions_universe` (no Pants release includes it yet). The compatibility
+  suite now checks a `CPython==3.15.*` project. On Pants 2.27–2.30, the pex that Pants bundles
+  cannot run on Python 3.15, so Pants fails before Pyrefly runs.
+- The `[pyrefly].interpreter_constraints` fallback, used only for a target with no interpreter
+  constraints of its own, is now `CPython>=3.9,<3.16` (was `<3.15`).
 - **The default pinned Pyrefly is now 1.4.1** (was 1.4.0); 1.4.0 stays pinned. The release
   notes list changes only to `pyrefly coverage` (see the
   [Pyrefly 1.4.1 release notes](https://github.com/facebook/pyrefly/releases/tag/1.4.1)), so
@@ -12,12 +22,6 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
   percentage: results are now the same on every run, functions and classes excluded with
   `@type_check_only` or `@no_type_check` are no longer counted as untyped variables, and a variable
   assigned an explicitly parameterized constructor call (`x = set[int]()`) counts as typed.
-- **Python 3.15 projects are supported** on Pants 2.31 and newer, once `"3.15"` is added to
-  `[python].interpreter_versions_universe` (no Pants release includes it yet). The compatibility
-  suite now checks a `CPython==3.15.*` project. On Pants 2.27–2.30, the pex that Pants bundles
-  cannot run on Python 3.15, so Pants fails before Pyrefly runs.
-- The `[pyrefly].interpreter_constraints` fallback, used only for a target with no interpreter
-  constraints of its own, is now `CPython>=3.9,<3.16` (was `<3.15`).
 
 ## 1.1.1 (2026-10-19)
 
