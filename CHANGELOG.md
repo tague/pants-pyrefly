@@ -5,6 +5,13 @@ All notable changes to `pants-pyrefly` are documented here. This project adheres
 
 ## Unreleased
 
+- **The default pinned Pyrefly is now 1.4.1** (was 1.4.0); 1.4.0 stays pinned. The release
+  notes list changes only to `pyrefly coverage` (see the
+  [Pyrefly 1.4.1 release notes](https://github.com/facebook/pyrefly/releases/tag/1.4.1)), so
+  `pants check` should report the same errors, but `pants pyrefly-coverage` can report a different
+  percentage: results are now the same on every run, functions and classes excluded with
+  `@type_check_only` or `@no_type_check` are no longer counted as untyped variables, and a variable
+  assigned an explicitly parameterized constructor call (`x = set[int]()`) counts as typed.
 - **Python 3.15 projects are supported** on Pants 2.31 and newer, once `"3.15"` is added to
   `[python].interpreter_versions_universe` (no Pants release includes it yet). The compatibility
   suite now checks a `CPython==3.15.*` project. On Pants 2.27–2.30, the pex that Pants bundles
