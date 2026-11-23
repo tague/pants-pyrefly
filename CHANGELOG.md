@@ -3,6 +3,21 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- **The default pinned Pyrefly is now 1.5.0** (was 1.4.1); 1.4.1 stays pinned. The newer Pyrefly
+  changes what some builds report (see the
+  [Pyrefly 1.5.0 release notes](https://github.com/facebook/pyrefly/releases/tag/1.5.0)):
+  - **Warnings are printed by default**, e.g. uses of deprecated APIs, `redundant-cast`, and
+    `unnecessary-type-conversion`. They do not change the exit code, so `pants check` passes or
+    fails as before, and `pants pyrefly-update-baseline` and `pants pyrefly-suppress` ignore them.
+    To hide them, set `[pyrefly].min_severity = "error"`.
+  - **Annotations look up names in the enclosing class body first**, and uninitialized names and
+    illegal circular references in annotations are now reported, which can surface errors 1.4.1
+    did not report.
+  - **`unreachable` now defaults to the new IDE-only `hint` severity** (was `warn`), so it no
+    longer appears in `pants check` output unless configured as `"warn"` or `"error"`.
+
 ## 1.2.0 (2026-11-09)
 
 Adds support for Python 3.15 projects and makes Pyrefly 1.4.1 the default. No breaking changes:
