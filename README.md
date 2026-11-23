@@ -276,7 +276,7 @@ Selecting a denylisted version fails with the recorded reason rather than a gene
 `UnknownVersion`, and suggests the plugin's default:
 
 ```
-DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.4.1).
+DenylistedPyreflyVersion: Pyrefly 1.2.1 is not supported by pants-pyrefly: <reason>. Set [pyrefly].version to a supported release (1.5.0).
 ```
 
 To use a denylisted version anyway, supply your own `[pyrefly].known_versions` entry for it on
