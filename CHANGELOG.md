@@ -3,7 +3,11 @@
 All notable changes to `pants-pyrefly` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.2.1 (2026-11-23)
+
+Pins Pyrefly 1.5.0 and makes it the default. No plugin code changes: the goals, `[pyrefly]`
+options, and `skip_pyrefly` field behave as before. Every version pinned in 1.2.0 is still pinned;
+to stay on the old default, set `[pyrefly].version = "1.4.1"`.
 
 - **The default pinned Pyrefly is now 1.5.0** (was 1.4.1); 1.4.1 stays pinned. The newer Pyrefly
   changes what some builds report (see the
